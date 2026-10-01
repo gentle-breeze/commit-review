@@ -48,7 +48,7 @@ function language(path) {
   return monaco.languages.getLanguages().find(item => item.filenames?.some(name => name.toLowerCase() === filename) || (extension && item.extensions?.includes(extension)))?.id || 'plaintext';
 }
 
-export function createComparison(container, { file, versions, onSelect, onChanges, wrap, collapse }) {
+export function createComparison(container, { file, versions, onSelect, onChanges, onCurrentChange, wrap, collapse }) {
   const editor = monaco.editor.createDiffEditor(container, {
     readOnly: true, originalEditable: false, domReadOnly: true,
     renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false,
@@ -70,11 +70,52 @@ export function createComparison(container, { file, versions, onSelect, onChange
   };
   const panes = { old: editor.getOriginalEditor(), new: editor.getModifiedEditor() };
   const decorations = { old: panes.old.createDecorationsCollection(), new: panes.new.createDecorationsCollection() };
+  const currentDecorations = { old: panes.old.createDecorationsCollection(), new: panes.new.createDecorationsCollection() };
   editor.setModel({ original: models.old, modified: models.new });
   let silent = false;
-  const listeners = [];
+  let changes = [], current = -1;
+  const changeRange = (change, side) => {
+    const prefix = side === 'old' ? 'original' : 'modified';
+    const start = change[`${prefix}StartLineNumber`], end = change[`${prefix}EndLineNumber`];
+    // A zero end denotes an insertion/deletion gap; mark the nearest boundary line.
+    const from = Math.max(1, Math.min(end === 0 ? start + 1 : start, models[side].getLineCount()));
+    return { start: from, end: end === 0 ? from : end, gap: end === 0 };
+  };
+  const activate = (index, reveal = false) => {
+    current = index;
+    for (const side of ['old', 'new']) {
+      const range = changes[current] && changeRange(changes[current], side);
+      currentDecorations[side].set(range ? [{
+        range: new monaco.Range(range.start, 1, range.end, 1),
+        options: { isWholeLine: true, className: range.gap ? 'review-current-gap' : 'review-current-diff', linesDecorationsClassName: 'review-current-diff-margin' },
+      }] : []);
+      if (reveal && range) panes[side].revealLineInCenter(range.start);
+    }
+    onCurrentChange(current + 1, changes.length);
+  };
+  const navigate = direction => {
+    if (!changes.length) return;
+    activate((current + (direction === 'previous' ? -1 : 1) + changes.length) % changes.length, true);
+  };
+  const keydown = event => {
+    if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !['[', ']'].includes(event.key)) return;
+    const target = event.target;
+    if (document.querySelector('dialog[open]') || target.isContentEditable || target.closest('input, select, textarea') && !target.matches('.monaco-editor textarea.inputarea')) return;
+    if (!changes.length) return;
+    event.preventDefault(); event.stopPropagation();
+    navigate(event.key === '[' ? 'previous' : 'next');
+  };
+  document.addEventListener('keydown', keydown, true);
+  const listeners = [{ dispose: () => document.removeEventListener('keydown', keydown, true) }];
   for (const side of ['old', 'new']) {
     panes[side].updateOptions({ ariaLabel: side === 'old' ? '修改前代码' : '修改后代码' });
+    listeners.push(panes[side].onDidChangeCursorPosition(event => {
+      const index = changes.findIndex(change => {
+        const range = changeRange(change, side);
+        return event.position.lineNumber >= range.start && event.position.lineNumber <= range.end;
+      });
+      if (index >= 0 && index !== current) activate(index);
+    }));
     listeners.push(panes[side].onMouseDown(event => {
       if (![monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS, monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN].includes(event.target.type)) return;
       event.event.preventDefault();
@@ -92,7 +133,11 @@ export function createComparison(container, { file, versions, onSelect, onChange
     }));
     listeners.push(panes[side].onKeyUp(event => { if (event.shiftKey) selectedText(); }));
   }
-  listeners.push(editor.onDidUpdateDiff(() => onChanges(editor.getLineChanges()?.length || 0)));
+  listeners.push(editor.onDidUpdateDiff(() => {
+    changes = editor.getLineChanges() || [];
+    onChanges(changes.length);
+    activate(changes.length ? Math.max(0, Math.min(current, changes.length - 1)) : -1);
+  }));
   return {
     paint(selection, comments) {
       for (const side of ['old', 'new']) {
@@ -117,7 +162,7 @@ export function createComparison(container, { file, versions, onSelect, onChange
         pane.focus();
       } finally { silent = false; }
     },
-    navigate(direction) { editor.goToDiff(direction); },
+    navigate,
     options({ wrap, collapse }) {
       editor.updateOptions({ wordWrap: wrap ? 'on' : 'off', diffWordWrap: wrap ? 'on' : 'off', hideUnchangedRegions: { enabled: collapse } });
     },

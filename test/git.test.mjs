@@ -18,7 +18,8 @@ async function fixture(t) {
 
 test('empty history, root diff, pagination and strict ref validation', async t => {
   const { repo, put, commit } = await fixture(t);
-  assert.deepEqual(await repo.commits(), { commits: [], hasMore: false });
+  assert.equal((await repo.commits()).status, 'unborn');
+  assert.deepEqual((await repo.commits()).commits, []);
   await assert.rejects(repo.commits('--all'), /无效/);
   await put('first.js', 'first\nsecond\n');
   const first = commit('初始提交');
@@ -31,10 +32,10 @@ test('empty history, root diff, pagination and strict ref validation', async t =
   await put('first.js', 'changed\nsecond\n');
   const second = commit('修改');
   const page = await repo.commits('main', 0, 1);
-  assert.equal(page.hasMore, true);
-  assert.equal(page.commits[0].sha, second);
-  assert.deepEqual(page.commits[0].parents, [first]);
-  assert.equal((await repo.commits('main', 1, 1)).commits[0].sha, first);
+  assert.equal(page.comparisonMode, 'local-base');
+  assert.equal(page.hasMore, false);
+  assert.deepEqual(page.commits, []);
+  await assert.rejects(repo.commits('main', -1, 1), /分页/);
   assert.equal((await repo.branches()).find(branch => branch.name === 'refs/heads/main').current, true);
   const diff = await repo.diff(second);
   assert.equal(validateAnchor(diff, { fileId: '0', side: 'old', startLine: 1, endLine: 1 }).code, 'first');
@@ -75,9 +76,9 @@ test('rename, deletion, binary, mode-only and unusual paths', async t => {
 
 test('merge compares first parent and linked worktrees open correctly', async t => {
   const { directory, git, put, commit, repo } = await fixture(t);
-  await put('base', 'base\n'); commit('base');
+  await put('base', 'base\n'); const base = commit('base');
   git('checkout', '-b', 'feature');
-  await put('feature', 'feature\n'); commit('feature');
+  await put('feature', 'feature\n'); const feature = commit('feature');
   git('checkout', 'main');
   await put('main', 'main\n'); const parent = commit('main');
   git('merge', '--no-ff', 'feature', '-m', 'merge feature');
@@ -85,10 +86,14 @@ test('merge compares first parent and linked worktrees open correctly', async t 
   assert.equal(diff.parent, parent);
   assert.equal(diff.parents.length, 2);
   assert.deepEqual(diff.files.map(file => file.path), ['feature']);
+  assert.equal((await repo.commits('main')).comparisonMode, 'local-base');
+  assert.equal((await repo.diff(base)).sha, base);
+  assert.equal((await repo.diff(feature)).sha, feature, 'off-mainline comment targets remain accessible');
   const linked = path.join(directory, 'linked');
   git('worktree', 'add', '--detach', linked);
   const linkedRepo = await GitRepo.open(linked);
-  assert.equal((await linkedRepo.commits()).commits[0].sha, diff.sha);
+  assert.equal((await linkedRepo.commits()).status, 'detached');
+  assert.equal((await linkedRepo.diff(diff.sha)).sha, diff.sha);
 });
 
 test('separate hunks, no newline and literal pathspec-like filenames', async t => {

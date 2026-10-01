@@ -14,15 +14,18 @@
   <header class="topbar">
     <div class="brand"><span class="logo">±</span><div><strong>Commit Review</strong><span class="subtitle">本地审查 · 精确评论 · AI 可读</span></div></div>
     <div id="repository" class="repository" title="当前仓库"></div>
+    <button id="focus-diff" type="button" aria-pressed="false">专注 diff</button>
+    <button id="toggle-comments" type="button" aria-expanded="false" aria-controls="comments-pane">显示评论</button>
     <button id="refresh" type="button">刷新</button>
     <button id="ai-copy" class="primary" type="button">复制 AI 指令</button>
   </header>
   <div id="notice" class="notice" role="status" hidden></div>
   <main class="workspace">
     <aside class="history pane" aria-label="提交历史">
-      <div class="pane-heading"><h1>提交历史</h1><span class="local-tag">LOCAL</span></div>
-      <label class="field-label" for="branch">分支 / 引用</label>
+      <div class="pane-heading"><h1>未 push 的提交</h1><span class="local-tag">LOCAL</span></div>
+      <label class="field-label" for="branch">本地分支</label>
       <select id="branch"><option value="HEAD">HEAD（当前提交）</option></select>
+      <p class="history-hint">仅显示未 push 的主线提交；基于本地远程记录，不自动 fetch。</p>
       <div id="commits" class="commit-list"></div>
       <button id="more" class="load-more" type="button" hidden>加载更多提交</button>
     </aside>
@@ -32,7 +35,7 @@
       <nav id="files" class="file-list" aria-label="变更文件"></nav>
       <div id="diff" class="diff-container"></div>
     </section>
-    <aside class="comments pane" aria-label="审查评论">
+    <aside id="comments-pane" class="comments pane" aria-label="审查评论" hidden>
       <div class="pane-heading"><h2>审查评论 <span id="comment-count" class="count">0</span></h2></div>
       <div class="comment-controls">
         <select id="comment-scope" aria-label="评论范围"><option value="commit">当前提交</option><option value="all">全部提交</option></select>

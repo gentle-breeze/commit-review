@@ -3,6 +3,9 @@ import { createComparison } from './editor.js';
 const $ = selector => document.querySelector(selector);
 const state = { info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true };
 
+const drafts = new Map();
+const draftKey = () => `${state.diff?.sha}:${state.file?.id}`;
+
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -44,7 +47,7 @@ function renderCommits() {
     node.append(meta);
     target.append(node);
   }
-  if (!state.commits.length) empty(target, '此仓库暂无提交');
+  if (!state.commits.length) empty(target, state.historyMessage || '没有未 push 的提交');
   $('#more').hidden = !state.hasMore;
 }
 async function loadCommits(append = false) {
@@ -53,6 +56,11 @@ async function loadCommits(append = false) {
   if (generation !== state.listGeneration) return;
   state.commits = append ? [...state.commits, ...result.commits] : result.commits;
   state.hasMore = result.hasMore;
+  state.historyMessage = result.message;
+  $('.history-hint').textContent = result.comparisonMode === 'local-base'
+    ? `无可用远程跟踪分支，对比本地 ${result.comparisonRef.replace('refs/heads/', '')}；仅显示相对基准独有的主线提交，不代表远程 push 状态。`
+    : `${result.comparisonRef ? `对比 ${result.comparisonRef.replace('refs/remotes/', '')}。` : ''}仅显示未 push 的主线提交；基于本地远程记录，不自动 fetch。`;
+  $('.history h1').textContent = result.comparisonMode === 'local-base' ? '分支独有提交' : '未 push 的提交';
   renderCommits();
   if (!append && state.commits.length) await loadDiff(state.commits[0].sha);
   else if (!state.commits.length) {
@@ -60,7 +68,7 @@ async function loadCommits(append = false) {
     state.generation++;
     state.diff = null;
     state.selection = null;
-    empty($('#commit-detail'), '此仓库暂无提交');
+    empty($('#commit-detail'), state.historyMessage || '没有未 push 的提交');
     $('#files').replaceChildren();
     $('#diff').replaceChildren();
     renderComments();
@@ -142,8 +150,11 @@ async function loadFile(fileId) {
   if (versions.unavailable) { card.append(el('div', 'warning', versions.unavailable)); return; }
   const tools = el('div', 'editor-tools');
   const count = el('span', 'change-count', '计算差异…');
-  const previous = button('↑ 上一处', () => state.editor?.navigate('previous'));
-  const next = button('↓ 下一处', () => state.editor?.navigate('next'));
+  const previous = button('[ 上一处', () => state.editor?.navigate('previous'));
+  const next = button('] 下一处', () => state.editor?.navigate('next'));
+  previous.setAttribute('aria-keyshortcuts', '['); next.setAttribute('aria-keyshortcuts', ']');
+  const current = el('span', 'current-change');
+  current.setAttribute('role', 'status');
   const wrap = el('input'); wrap.type = 'checkbox'; wrap.checked = state.wrap; wrap.id = 'wrap-lines';
   const collapse = el('input'); collapse.type = 'checkbox'; collapse.checked = state.collapse; collapse.id = 'collapse-lines';
   const wrapLabel = el('label'); wrapLabel.append(wrap, '自动换行');
@@ -153,7 +164,7 @@ async function loadFile(fileId) {
     state.editor?.options(state);
   };
   wrap.addEventListener('change', updateOptions); collapse.addEventListener('change', updateOptions);
-  tools.append(previous, next, count, wrapLabel, collapseLabel);
+  tools.append(previous, next, current, count, wrapLabel, collapseLabel);
   card.append(tools);
   const headings = el('div', 'editor-headings');
   for (const side of ['old', 'new']) {
@@ -166,18 +177,54 @@ async function loadFile(fileId) {
   const viewport = el('div', 'editor-scroll');
   const container = el('div', 'monaco-host');
   viewport.append(container); card.append(viewport);
-  const actions = el('div', 'selection-actions'); actions.hidden = true; actions.dataset.actions = file.id;
-  actions.append(el('span', 'selection-description'), button('添加评论', () => openComment(), 'primary'), button('取消', () => { state.selection = null; paintSelection(); }));
+  const key = draftKey();
+  const actions = el('form', 'selection-actions'); actions.hidden = true; actions.dataset.actions = file.id;
+  const label = el('label', 'selection-description'); label.htmlFor = 'inline-comment-body';
+  const input = el('textarea'); input.id = 'inline-comment-body'; input.rows = 2; input.required = true; input.maxLength = 10000;
+  input.placeholder = '写下评论…（⌘ / Ctrl + Enter 保存）';
+  input.value = drafts.get(key)?.body || '';
+  input.addEventListener('input', () => { const draft = drafts.get(key); if (draft) draft.body = input.value; });
+  const save = el('button', 'primary', '保存评论'); save.type = 'submit';
+  const error = el('span', 'form-error'); error.setAttribute('role', 'alert');
+  const cancel = button('取消', () => { drafts.delete(key); input.value = ''; error.textContent = ''; state.selection = null; paintSelection(); });
+  actions.append(label, input, save, cancel, error);
+  input.addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); actions.requestSubmit(); }
+  });
+  actions.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = drafts.get(key);
+    if (!draft || draft.saving) return;
+    draft.saving = true;
+    input.disabled = save.disabled = cancel.disabled = true;
+    error.textContent = '';
+    try {
+      await api('/api/comments', 'POST', { sha: diff.sha, anchor: { ...draft.anchor }, body: draft.body });
+      drafts.delete(key);
+      if (draftKey() === key) { state.selection = null; input.value = ''; }
+      await reloadComments();
+      commentsOpen = true; updatePanels();
+      notice('评论已保存，本地 JSON 和 Markdown 已更新。');
+    } catch (failure) { error.textContent = failure.message; notice(failure.message, true); }
+    finally { draft.saving = false; input.disabled = save.disabled = cancel.disabled = false; paintSelection(); }
+  });
+  if (drafts.get(key)?.saving) input.disabled = save.disabled = cancel.disabled = true;
+  state.selection = drafts.get(key)?.anchor || null;
   card.append(actions);
   state.editor = createComparison(container, {
     file, versions, wrap: state.wrap, collapse: state.collapse,
     onSelect: (side, start, end, extend) => selectLines(file, side, start, end, extend),
     onChanges: amount => { count.textContent = `${amount} 处变更`; previous.disabled = next.disabled = !amount; },
+    onCurrentChange: (index, total) => { current.textContent = total ? `当前 ${index} / ${total}` : ''; },
   });
   paintSelection();
 }
 function selectLines(file, side, startLine, endLine, extend) {
   if (!state.versions?.[side]?.exists || endLine > state.versions[side].lineCount) return;
+  const draft = drafts.get(draftKey());
+  if (draft?.saving || draft?.body.trim()) {
+    notice('请先保存或取消当前草稿，再更改评论行范围。', true); return;
+  }
   const previous = state.selection;
   if (extend && previous && (previous.fileId !== file.id || previous.side !== side)) {
     notice('多行评论必须在同一文件的同一侧选择。', true); return;
@@ -186,32 +233,30 @@ function selectLines(file, side, startLine, endLine, extend) {
   startLine = Math.min(base, startLine); endLine = Math.max(base, endLine);
   if (endLine - startLine >= 200) { notice('单条评论最多选择 200 行。', true); return; }
   state.selection = { fileId: file.id, side, base, startLine, endLine };
+  drafts.set(draftKey(), { anchor: { ...state.selection }, body: draft?.body || '', saving: false });
   notice(''); paintSelection();
 }
 function paintSelection() {
   const selection = state.selection;
   state.editor?.paint(selection, state.comments.filter(comment => !comment.resolved && comment.sha === state.diff?.sha && comment.fileId === state.file?.id));
   document.querySelectorAll('[data-actions]').forEach(node => {
-    node.hidden = !selection || node.dataset.actions !== selection.fileId;
-    if (!node.hidden) node.querySelector('span').textContent = `${selection.side === 'old' ? '旧版本' : '新版本'} · 第 ${selection.startLine}–${selection.endLine} 行`;
+    const draft = drafts.get(draftKey());
+    node.hidden = !draft || node.dataset.actions !== draft.anchor.fileId;
+    if (!node.hidden) {
+      const anchor = draft.anchor;
+      node.querySelector('label').textContent = `${state.file.path} · ${anchor.side === 'old' ? '旧版本' : '新版本'} · 第 ${anchor.startLine}–${anchor.endLine} 行`;
+      node.querySelector('textarea').disabled = !!draft.saving;
+      node.querySelectorAll('button').forEach(button => { button.disabled = !!draft.saving; });
+    }
   });
 }
-function openComment(comment = null) {
+function openComment(comment) {
   state.editing = comment;
   $('#form-error').textContent = '';
-  $('#dialog-title').textContent = comment ? '编辑评论' : '添加评论';
-  $('#comment-body').value = comment?.body || '';
-  if (comment) {
-    $('#selection-label').textContent = `${comment.path} · ${comment.side} ${comment.startLine}–${comment.endLine}`;
-    $('#selection-code').textContent = comment.code;
-  } else {
-    const selection = state.selection;
-    if (!selection || !state.diff) return;
-    const file = state.diff.files.find(file => file.id === selection.fileId);
-    const code = state.versions[selection.side].text.split('\n').slice(selection.startLine - 1, selection.endLine).map(line => line.replace(/\r$/, '')).join('\n');
-    $('#selection-label').textContent = `${file.path} · ${selection.side} ${selection.startLine}–${selection.endLine}`;
-    $('#selection-code').textContent = code;
-  }
+  $('#dialog-title').textContent = '编辑评论';
+  $('#comment-body').value = comment.body;
+  $('#selection-label').textContent = `${comment.path} · ${comment.side} ${comment.startLine}–${comment.endLine}`;
+  $('#selection-code').textContent = comment.code;
   $('#comment-dialog').showModal();
   $('#comment-body').focus();
 }
@@ -259,6 +304,29 @@ function renderComments() {
   }
   if (!comments.length) empty(target, '暂无符合条件的评论。\n点击 diff 行号，开始第一条评论。');
 }
+let focusDiff = false;
+let commentsOpen = false;
+function updatePanels() {
+  $('.workspace').classList.toggle('focus-diff', focusDiff);
+  $('.workspace').classList.toggle('comments-open', commentsOpen);
+  $('.history').hidden = focusDiff;
+  $('#comments-pane').hidden = !commentsOpen;
+  $('#toggle-comments').textContent = commentsOpen ? '隐藏评论' : '显示评论';
+  $('#toggle-comments').setAttribute('aria-expanded', String(commentsOpen));
+  $('#focus-diff').textContent = focusDiff ? '退出专注' : '专注 diff';
+  $('#focus-diff').setAttribute('aria-pressed', String(focusDiff));
+}
+$('#toggle-comments').addEventListener('click', () => {
+  commentsOpen = !commentsOpen;
+  updatePanels();
+});
+let commentsBeforeFocus = false;
+$('#focus-diff').addEventListener('click', () => {
+  focusDiff = !focusDiff;
+  if (focusDiff) { commentsBeforeFocus = commentsOpen; commentsOpen = false; }
+  else commentsOpen = commentsBeforeFocus;
+  updatePanels();
+});
 $('#comment-form').addEventListener('submit', async event => {
   event.preventDefault();
   const save = $('#save-comment');
@@ -266,11 +334,12 @@ $('#comment-form').addEventListener('submit', async event => {
   save.disabled = true;
   try {
     const body = $('#comment-body').value;
-    if (state.editing) await api(`/api/comments/${state.editing.id}`, 'PATCH', { body });
-    else await api('/api/comments', 'POST', { sha: state.diff.sha, anchor: state.selection, body });
+    await api(`/api/comments/${state.editing.id}`, 'PATCH', { body });
     $('#comment-dialog').close();
     state.selection = null;
     await reloadComments();
+    commentsOpen = true;
+    updatePanels();
     notice('评论已保存，本地 JSON 和 Markdown 已更新。');
   } catch (error) { $('#form-error').textContent = error.message; }
   finally { save.disabled = false; }

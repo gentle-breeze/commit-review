@@ -10,7 +10,7 @@ import { createApp } from '../server.mjs';
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'review-api-'));
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  git('init'); git('config', 'user.name', 'Review Test'); git('config', 'user.email', 'test@example.invalid');
+  git('init', '-b', 'main'); git('config', 'user.name', 'Review Test'); git('config', 'user.email', 'test@example.invalid');
   await writeFile(path.join(root, 'hello.js'), 'first\nsecond\nthird\n');
   git('add', '.'); git('commit', '-m', 'Initial commit');
   const sha = git('rev-parse', 'HEAD');
@@ -40,7 +40,8 @@ test('HTTP review workflow and exported AI context', async t => {
   assert.match(await page.text(), /Commit Review/);
   assert.equal((await request('/app.js')).status, 200);
   const history = await (await request('/api/commits?limit=1')).json();
-  assert.equal(history.commits[0].sha, sha);
+  assert.deepEqual(history.commits, []);
+  assert.equal(history.comparisonMode, 'local-base');
   const diff = await (await request(`/api/diff?sha=${sha}`)).json();
   const versions = await (await request(`/api/file?sha=${sha}&fileId=${diff.files[0].id}`)).json();
   assert.equal(versions.new.text, 'first\nsecond\nthird\n');

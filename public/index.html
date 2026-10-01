@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Commit Review</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232c725e'/%3E%3Ctext x='12' y='45' font-size='40' fill='white'%3E±%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/assets/app.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">±</span><div><strong>Commit Review</strong><span class="subtitle">本地审查 · 精确评论 · AI 可读</span></div></div>
+    <div id="repository" class="repository" title="当前仓库"></div>
+    <button id="refresh" type="button">刷新</button>
+    <button id="ai-copy" class="primary" type="button">复制 AI 指令</button>
+  </header>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <main class="workspace">
+    <aside class="history pane" aria-label="提交历史">
+      <div class="pane-heading"><h1>提交历史</h1><span class="local-tag">LOCAL</span></div>
+      <label class="field-label" for="branch">分支 / 引用</label>
+      <select id="branch"><option value="HEAD">HEAD（当前提交）</option></select>
+      <div id="commits" class="commit-list"></div>
+      <button id="more" class="load-more" type="button" hidden>加载更多提交</button>
+    </aside>
+    <section class="review pane" aria-label="代码差异">
+      <div id="commit-detail" class="commit-detail"><div class="empty">选择一个 commit 开始 Review</div></div>
+      <div class="review-toolbar"><span>点击行号或拖选代码评论 · Shift + 点击扩选</span><span>IDE 对比 · 完整上下文 · 只读</span></div>
+      <nav id="files" class="file-list" aria-label="变更文件"></nav>
+      <div id="diff" class="diff-container"></div>
+    </section>
+    <aside class="comments pane" aria-label="审查评论">
+      <div class="pane-heading"><h2>审查评论 <span id="comment-count" class="count">0</span></h2></div>
+      <div class="comment-controls">
+        <select id="comment-scope" aria-label="评论范围"><option value="commit">当前提交</option><option value="all">全部提交</option></select>
+        <select id="comment-filter" aria-label="评论状态"><option value="open">未解决</option><option value="all">全部状态</option><option value="resolved">已解决</option></select>
+      </div>
+      <div id="comments" class="comment-list"></div>
+      <details class="ai-details"><summary>AI 如何读取评论？</summary><p>评论实时保存到本地，代码和评论不会上传。点击顶部按钮，将指令粘贴给 Claude Code。</p><p>Markdown 文件：</p><code id="markdown-path"></code><p>JSON 文件：</p><code id="json-path"></code><p>修改前请让 AI 核对当前 HEAD 与历史 commit，避免覆盖已有改动。</p></details>
+    </aside>
+  </main>
+  <dialog id="comment-dialog">
+    <form id="comment-form">
+      <div class="dialog-heading"><h2 id="dialog-title">添加评论</h2><button type="button" id="cancel-comment" aria-label="关闭评论窗口">×</button></div>
+      <p id="selection-label" class="selection-label"></p>
+      <pre id="selection-code" class="selection-code"></pre>
+      <label for="comment-body" class="field-label">你希望 AI 注意或修改什么？</label>
+      <textarea id="comment-body" maxlength="10000" rows="6" required placeholder="例如：这里没有处理空数组，请补充边界检查和测试。"></textarea>
+      <p id="form-error" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><span>⌘ / Ctrl + Enter 保存</span><button id="save-comment" type="submit" class="primary">保存评论</button></div>
+    </form>
+  </dialog>
+  <dialog id="ai-dialog"><div class="dialog-heading"><h2>复制给 Claude Code</h2><button id="close-ai" aria-label="关闭" type="button">×</button></div><p>剪贴板不可用，请手动复制下面的内容。</p><textarea id="ai-text" rows="10" readonly aria-label="AI 指令"></textarea></dialog>
+</body>
+</html>

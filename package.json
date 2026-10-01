@@ -1,0 +1,26 @@
+{
+  "name": "local-commit-review",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Git commit review with line comments for coding assistants",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prestart": "npm run build",
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser-smoke.mjs"
+  },
+  "dependencies": {
+    "monaco-editor": "0.57.0"
+  },
+  "overrides": {
+    "dompurify": "3.4.16"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

@@ -124,7 +124,27 @@ async function renderDiff() {
   if (diff.files.length) await loadFile(diff.files[0].id);
   else empty($('#diff'), '此提交没有文件差异');
 }
-async function loadFile(fileId) {
+document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  const direction = event.code === 'BracketLeft' || event.key === '[' ? 'previous'
+    : event.code === 'BracketRight' || event.key === ']' ? 'next' : null;
+  if (!direction || !state.file || !state.versions) return;
+  const target = event.target;
+  const codeInput = $('#diff').contains(target) && target.matches('.inputarea, .native-edit-context, .ime-text-area');
+  if (document.querySelector('dialog[open]') || !codeInput && (target.isContentEditable || target.closest('input, select, textarea'))) return;
+  event.preventDefault(); event.stopPropagation();
+  run(() => state.editor ? state.editor.navigate(direction) : navigateFile(direction));
+}, true);
+function navigateFile(direction) {
+  const files = state.diff?.files || [];
+  const index = files.findIndex(file => file.id === state.file?.id);
+  if (index < 0) return;
+  const next = files[index + (direction === 'previous' ? -1 : 1)];
+  if (!next) { notice(direction === 'previous' ? '已到本次提交的第一个文件。' : '已到本次提交的最后一个文件。'); return; }
+  notice('');
+  return loadFile(next.id, direction);
+}
+async function loadFile(fileId, entry = null) {
   disposeEditor();
   const generation = state.fileGeneration;
   const diff = state.diff;
@@ -145,9 +165,17 @@ async function loadFile(fileId) {
   const card = el('article', 'file-card');
   card.id = `file-${file.id}`;
   const name = file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path;
-  card.append(el('div', 'file-header', `${file.status}  ${name}`));
+  const header = el('div', 'file-header');
+  const title = el('span', 'file-title', `${file.status}  ${name}`); title.title = name;
+  header.append(title); card.append(header);
   $('#diff').replaceChildren(card);
-  if (versions.unavailable) { card.append(el('div', 'warning', versions.unavailable)); return; }
+  if (versions.unavailable) {
+    card.append(el('div', 'warning', versions.unavailable));
+    const navigation = el('div', 'editor-tools');
+    navigation.append(button('[ 上一个文件', () => run(() => navigateFile('previous'))), button('] 下一个文件', () => run(() => navigateFile('next'))));
+    header.append(navigation);
+    return;
+  }
   const tools = el('div', 'editor-tools');
   const count = el('span', 'change-count', '计算差异…');
   const previous = button('[ 上一处', () => state.editor?.navigate('previous'));
@@ -165,15 +193,7 @@ async function loadFile(fileId) {
   };
   wrap.addEventListener('change', updateOptions); collapse.addEventListener('change', updateOptions);
   tools.append(previous, next, current, count, wrapLabel, collapseLabel);
-  card.append(tools);
-  const headings = el('div', 'editor-headings');
-  for (const side of ['old', 'new']) {
-    const heading = el('div');
-    heading.append(el('strong', '', side === 'old' ? '修改前 · OLD' : '修改后 · NEW'),
-      el('span', 'version-label', versions[side].exists ? `${side === 'old' ? diff.parent.slice(0, 8) : diff.sha.slice(0, 8)} · ${side === 'old' ? file.oldPath : file.path}` : '此版本中不存在该文件'));
-    headings.append(heading);
-  }
-  card.append(headings);
+  header.append(tools);
   const viewport = el('div', 'editor-scroll');
   const container = el('div', 'monaco-host');
   viewport.append(container); card.append(viewport);
@@ -203,7 +223,6 @@ async function loadFile(fileId) {
       drafts.delete(key);
       if (draftKey() === key) { state.selection = null; input.value = ''; }
       await reloadComments();
-      commentsOpen = true; updatePanels();
       notice('评论已保存，本地 JSON 和 Markdown 已更新。');
     } catch (failure) { error.textContent = failure.message; notice(failure.message, true); }
     finally { draft.saving = false; input.disabled = save.disabled = cancel.disabled = false; paintSelection(); }
@@ -212,9 +231,17 @@ async function loadFile(fileId) {
   state.selection = drafts.get(key)?.anchor || null;
   card.append(actions);
   state.editor = createComparison(container, {
-    file, versions, wrap: state.wrap, collapse: state.collapse,
+    file, versions, entry, wrap: state.wrap, collapse: state.collapse,
+    onBoundary: direction => run(() => navigateFile(direction)),
     onSelect: (side, start, end, extend) => selectLines(file, side, start, end, extend),
-    onChanges: amount => { count.textContent = `${amount} 处变更`; previous.disabled = next.disabled = !amount; },
+    onSelectionComplete: () => {
+      requestAnimationFrame(() => {
+        if (generation !== state.fileGeneration || state.diff !== diff || actions.hidden || input.disabled) return;
+        input.focus({ preventScroll: true });
+        input.scrollIntoView({ block: 'nearest' });
+      });
+    },
+    onChanges: amount => { count.textContent = `${amount} 处变更`; },
     onCurrentChange: (index, total) => { current.textContent = total ? `当前 ${index} / ${total}` : ''; },
   });
   paintSelection();
@@ -235,6 +262,7 @@ function selectLines(file, side, startLine, endLine, extend) {
   state.selection = { fileId: file.id, side, base, startLine, endLine };
   drafts.set(draftKey(), { anchor: { ...state.selection }, body: draft?.body || '', saving: false });
   notice(''); paintSelection();
+  return true;
 }
 function paintSelection() {
   const selection = state.selection;
@@ -274,7 +302,7 @@ function renderComments() {
   target.replaceChildren();
   for (const comment of [...comments].reverse()) {
     const card = el('article', `comment-card${comment.resolved ? ' resolved' : ''}`);
-    const anchor = button(`${comment.sha.slice(0, 8)} · ${comment.path}\n${comment.side} ${comment.startLine}–${comment.endLine}`, () => run(async () => {
+    const jumpToComment = () => run(async () => {
       if (state.diff?.sha !== comment.sha) await loadDiff(comment.sha);
       if (state.diff?.sha !== comment.sha) return;
       const file = state.diff.files.find(file => file.id === comment.fileId);
@@ -288,8 +316,14 @@ function renderComments() {
       state.editor.reveal(state.selection);
       paintSelection();
       document.getElementById(`file-${file.id}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }), 'comment-anchor');
-    card.append(anchor, el('p', '', comment.body), el('div', 'comment-time', `${comment.resolved ? '已解决 · ' : ''}${date(comment.updatedAt)}`));
+    });
+    const anchor = button(`${comment.sha.slice(0, 8)} · ${comment.path}\n${comment.side} ${comment.startLine}–${comment.endLine}`, jumpToComment, 'comment-anchor');
+    const body = button(comment.body, jumpToComment, 'comment-body-link');
+    body.title = '跳转到评论对应的代码行';
+    card.addEventListener('click', event => {
+      if (!event.target.closest('button') && !window.getSelection()?.toString()) jumpToComment();
+    });
+    card.append(anchor, body, el('div', 'comment-time', `${comment.resolved ? '已解决 · ' : ''}${date(comment.updatedAt)}`));
     const actions = el('div', 'comment-actions');
     actions.append(button(comment.resolved ? '重新打开' : '标记已解决', () => run(async () => {
       await api(`/api/comments/${comment.id}`, 'PATCH', { resolved: !comment.resolved });
@@ -308,11 +342,18 @@ let focusDiff = false;
 let commentsOpen = false;
 function updatePanels() {
   $('.workspace').classList.toggle('focus-diff', focusDiff);
+  $('.topbar').hidden = focusDiff;
+  $('#commit-detail').hidden = focusDiff;
+  $('.review-toolbar').hidden = focusDiff;
+  $('#files').hidden = focusDiff;
+  $('#focus-actions').hidden = !focusDiff;
   $('.workspace').classList.toggle('comments-open', commentsOpen);
   $('.history').hidden = focusDiff;
   $('#comments-pane').hidden = !commentsOpen;
-  $('#toggle-comments').textContent = commentsOpen ? '隐藏评论' : '显示评论';
-  $('#toggle-comments').setAttribute('aria-expanded', String(commentsOpen));
+  for (const selector of ['#toggle-comments', '#focus-comments']) {
+    $(selector).textContent = commentsOpen ? '隐藏评论' : '显示评论';
+    $(selector).setAttribute('aria-expanded', String(commentsOpen));
+  }
   $('#focus-diff').textContent = focusDiff ? '退出专注' : '专注 diff';
   $('#focus-diff').setAttribute('aria-pressed', String(focusDiff));
 }
@@ -326,7 +367,10 @@ $('#focus-diff').addEventListener('click', () => {
   if (focusDiff) { commentsBeforeFocus = commentsOpen; commentsOpen = false; }
   else commentsOpen = commentsBeforeFocus;
   updatePanels();
+  (focusDiff ? $('#exit-focus') : $('#focus-diff')).focus();
 });
+$('#exit-focus').addEventListener('click', () => $('#focus-diff').click());
+$('#focus-comments').addEventListener('click', () => $('#toggle-comments').click());
 $('#comment-form').addEventListener('submit', async event => {
   event.preventDefault();
   const save = $('#save-comment');
@@ -338,8 +382,6 @@ $('#comment-form').addEventListener('submit', async event => {
     $('#comment-dialog').close();
     state.selection = null;
     await reloadComments();
-    commentsOpen = true;
-    updatePanels();
     notice('评论已保存，本地 JSON 和 Markdown 已更新。');
   } catch (error) { $('#form-error').textContent = error.message; }
   finally { save.disabled = false; }

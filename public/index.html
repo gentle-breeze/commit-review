@@ -30,6 +30,7 @@
       <button id="more" class="load-more" type="button" hidden>加载更多提交</button>
     </aside>
     <section class="review pane" aria-label="代码差异">
+      <div id="focus-actions" hidden><button id="focus-comments" type="button" aria-expanded="false" aria-controls="comments-pane">显示评论</button><button id="exit-focus" type="button">退出专注</button></div>
       <div id="commit-detail" class="commit-detail"><div class="empty">选择一个 commit 开始 Review</div></div>
       <div class="review-toolbar"><span>点击行号或拖选代码评论 · Shift + 点击扩选</span><span>IDE 对比 · 完整上下文 · 只读</span></div>
       <nav id="files" class="file-list" aria-label="变更文件"></nav>

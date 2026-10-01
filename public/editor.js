@@ -48,7 +48,7 @@ function language(path) {
   return monaco.languages.getLanguages().find(item => item.filenames?.some(name => name.toLowerCase() === filename) || (extension && item.extensions?.includes(extension)))?.id || 'plaintext';
 }
 
-export function createComparison(container, { file, versions, onSelect, onChanges, onCurrentChange, wrap, collapse }) {
+export function createComparison(container, { file, versions, onSelect, onSelectionComplete, onChanges, onCurrentChange, onBoundary, entry, wrap, collapse }) {
   const editor = monaco.editor.createDiffEditor(container, {
     readOnly: true, originalEditable: false, domReadOnly: true,
     renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false,
@@ -94,19 +94,11 @@ export function createComparison(container, { file, versions, onSelect, onChange
     onCurrentChange(current + 1, changes.length);
   };
   const navigate = direction => {
-    if (!changes.length) return;
-    activate((current + (direction === 'previous' ? -1 : 1) + changes.length) % changes.length, true);
+    const next = current + (direction === 'previous' ? -1 : 1);
+    if (!changes.length || next < 0 || next >= changes.length) { onBoundary(direction); return; }
+    activate(next, true);
   };
-  const keydown = event => {
-    if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !['[', ']'].includes(event.key)) return;
-    const target = event.target;
-    if (document.querySelector('dialog[open]') || target.isContentEditable || target.closest('input, select, textarea') && !target.matches('.monaco-editor textarea.inputarea')) return;
-    if (!changes.length) return;
-    event.preventDefault(); event.stopPropagation();
-    navigate(event.key === '[' ? 'previous' : 'next');
-  };
-  document.addEventListener('keydown', keydown, true);
-  const listeners = [{ dispose: () => document.removeEventListener('keydown', keydown, true) }];
+  const listeners = [];
   for (const side of ['old', 'new']) {
     panes[side].updateOptions({ ariaLabel: side === 'old' ? '修改前代码' : '修改后代码' });
     listeners.push(panes[side].onDidChangeCursorPosition(event => {
@@ -116,27 +108,36 @@ export function createComparison(container, { file, versions, onSelect, onChange
       });
       if (index >= 0 && index !== current) activate(index);
     }));
+    let gutterSelected = false;
     listeners.push(panes[side].onMouseDown(event => {
+      gutterSelected = false;
       if (![monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS, monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN].includes(event.target.type)) return;
       event.event.preventDefault();
       const line = event.target.position?.lineNumber;
-      if (line && line <= versions[side].lineCount) onSelect(side, line, line, event.event.shiftKey);
+      if (line && line <= versions[side].lineCount) gutterSelected = onSelect(side, line, line, event.event.shiftKey) === true;
     }));
     const selectedText = () => {
       const selection = panes[side].getSelection();
       if (silent || !selection || selection.isEmpty()) return;
       const end = selection.endLineNumber > selection.startLineNumber && selection.endColumn === 1 ? selection.endLineNumber - 1 : selection.endLineNumber;
-      if (end <= versions[side].lineCount) onSelect(side, selection.startLineNumber, end, false);
+      if (end <= versions[side].lineCount) return onSelect(side, selection.startLineNumber, end, false) === true;
+      return false;
     };
     listeners.push(panes[side].onMouseUp(event => {
-      if (event.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT || event.target.type === monaco.editor.MouseTargetType.CONTENT_EMPTY) selectedText();
+      const textSelected = !gutterSelected && (event.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT || event.target.type === monaco.editor.MouseTargetType.CONTENT_EMPTY) && selectedText();
+      if (gutterSelected || textSelected) onSelectionComplete();
+      gutterSelected = false;
     }));
-    listeners.push(panes[side].onKeyUp(event => { if (event.shiftKey) selectedText(); }));
+    listeners.push(panes[side].onKeyUp(event => {
+      if (event.keyCode === monaco.KeyCode.Shift && selectedText()) onSelectionComplete();
+    }));
   }
   listeners.push(editor.onDidUpdateDiff(() => {
     changes = editor.getLineChanges() || [];
     onChanges(changes.length);
-    activate(changes.length ? Math.max(0, Math.min(current, changes.length - 1)) : -1);
+    const initialEntry = entry;
+    entry = null;
+    activate(changes.length ? initialEntry === 'previous' ? changes.length - 1 : Math.max(0, Math.min(current, changes.length - 1)) : -1, !!initialEntry);
   }));
   return {
     paint(selection, comments) {

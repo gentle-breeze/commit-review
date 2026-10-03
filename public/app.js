@@ -128,10 +128,17 @@ document.addEventListener('keydown', event => {
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   const direction = event.code === 'BracketLeft' || event.key === '[' ? 'previous'
     : event.code === 'BracketRight' || event.key === ']' ? 'next' : null;
-  if (!direction || !state.file || !state.versions) return;
+  const toggleFocus = event.code === 'KeyF' || event.key === 'f';
+  if (!direction && !toggleFocus) return;
   const target = event.target;
   const codeInput = $('#diff').contains(target) && target.matches('.inputarea, .native-edit-context, .ime-text-area');
   if (document.querySelector('dialog[open]') || !codeInput && (target.isContentEditable || target.closest('input, select, textarea'))) return;
+  if (toggleFocus) {
+    event.preventDefault(); event.stopPropagation();
+    if (!event.repeat) $('#focus-diff').click();
+    return;
+  }
+  if (!state.file || !state.versions) return;
   event.preventDefault(); event.stopPropagation();
   run(() => state.editor ? state.editor.navigate(direction) : navigateFile(direction));
 }, true);

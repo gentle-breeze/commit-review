@@ -106,6 +106,16 @@ try {
   assert.equal(await evaluate('[".topbar", "#commit-detail", ".review-toolbar", "#files"].every(selector => !document.querySelector(selector).hidden)'), true);
   assert.equal(await evaluate('!document.querySelector(".history").hidden && !document.querySelector("#comments-pane").hidden'), true);
   await evaluate('document.querySelector("#toggle-comments").click()');
+  const pressFocus = async (repeat = false) => {
+    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'f', code: 'KeyF', text: 'f', windowsVirtualKeyCode: 70, autoRepeat: repeat });
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'f', code: 'KeyF' });
+  };
+  await pressFocus();
+  assert.equal(await evaluate('document.querySelector(".workspace").classList.contains("focus-diff")'), true);
+  await pressFocus(true);
+  assert.equal(await evaluate('document.querySelector(".workspace").classList.contains("focus-diff")'), true, 'holding F does not toggle repeatedly');
+  await pressFocus();
+  assert.equal(await evaluate('document.querySelector(".workspace").classList.contains("focus-diff")'), false);
   const clickLine = async (side, line, shift = false) => {
     const point = await evaluate(`(() => {
       const pane = document.querySelector('.monaco-diff-editor .editor.${side === 'old' ? 'original' : 'modified'}');
@@ -155,7 +165,9 @@ try {
   await press('['); await press(']');
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: '】', code: 'BracketRight', text: '】', windowsVirtualKeyCode: 221 });
   await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: '】', code: 'BracketRight' });
-  assert.equal(await evaluate('document.querySelector("#inline-comment-body").value'), '[]】');
+  await pressFocus();
+  assert.equal(await evaluate('document.querySelector("#inline-comment-body").value'), '[]】f');
+  assert.equal(await evaluate('document.querySelector(".workspace").classList.contains("focus-diff")'), false, 'typing F in a comment does not toggle focus');
   assert.equal(await evaluate('document.querySelector(".current-change").textContent'), beforeTyping);
   await evaluate('document.querySelector(".selection-actions button[type=button]").click(); document.querySelector("#branch").focus()');
   await press(']');

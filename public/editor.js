@@ -48,7 +48,7 @@ function language(path) {
   return monaco.languages.getLanguages().find(item => item.filenames?.some(name => name.toLowerCase() === filename) || (extension && item.extensions?.includes(extension)))?.id || 'plaintext';
 }
 
-export function createComparison(container, { file, versions, onSelect, onSelectionComplete, onChanges, onCurrentChange, onBoundary, entry, wrap, collapse }) {
+export function createComparison(container, { file, versions, onSelect, onSelectionComplete, onCommentClick, onViewportChange, onChanges, onCurrentChange, onBoundary, entry, wrap, collapse }) {
   const editor = monaco.editor.createDiffEditor(container, {
     readOnly: true, originalEditable: false, domReadOnly: true,
     renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false,
@@ -101,6 +101,7 @@ export function createComparison(container, { file, versions, onSelect, onSelect
   const listeners = [];
   for (const side of ['old', 'new']) {
     panes[side].updateOptions({ ariaLabel: side === 'old' ? '修改前代码' : '修改后代码' });
+    listeners.push(panes[side].onDidScrollChange(onViewportChange), panes[side].onDidLayoutChange(onViewportChange));
     listeners.push(panes[side].onDidChangeCursorPosition(event => {
       const index = changes.findIndex(change => {
         const range = changeRange(change, side);
@@ -108,8 +109,15 @@ export function createComparison(container, { file, versions, onSelect, onSelect
       });
       if (index >= 0 && index !== current) activate(index);
     }));
-    let gutterSelected = false;
+    let gutterSelected = false, clickStart = null, dragged = false;
+    listeners.push(panes[side].onMouseMove(event => {
+      if (clickStart && Math.hypot(event.event.posx - clickStart.x, event.event.posy - clickStart.y) > 3) dragged = true;
+    }));
     listeners.push(panes[side].onMouseDown(event => {
+      const mouse = event.event;
+      clickStart = mouse.leftButton && !mouse.shiftKey && !mouse.ctrlKey && !mouse.metaKey && !mouse.altKey
+        ? { x: mouse.posx, y: mouse.posy, line: event.target.position?.lineNumber } : null;
+      dragged = false;
       gutterSelected = false;
       if (![monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS, monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN].includes(event.target.type)) return;
       event.event.preventDefault();
@@ -119,36 +127,50 @@ export function createComparison(container, { file, versions, onSelect, onSelect
     const selectedText = () => {
       const selection = panes[side].getSelection();
       if (silent || !selection || selection.isEmpty()) return;
-      const end = selection.endLineNumber > selection.startLineNumber && selection.endColumn === 1 ? selection.endLineNumber - 1 : selection.endLineNumber;
-      if (end <= versions[side].lineCount) return onSelect(side, selection.startLineNumber, end, false) === true;
+      if (selection.endLineNumber <= models[side].getLineCount()) return onSelect(side, selection.startLineNumber, selection.endLineNumber, false, {
+        startColumn: selection.startColumn, endColumn: selection.endColumn,
+      }) === true;
       return false;
     };
     listeners.push(panes[side].onMouseUp(event => {
       const textSelected = !gutterSelected && (event.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT || event.target.type === monaco.editor.MouseTargetType.CONTENT_EMPTY) && selectedText();
-      if (gutterSelected || textSelected) onSelectionComplete();
+      if (gutterSelected || textSelected) onSelectionComplete(gutterSelected ? null : models[side].getValueInRange(panes[side].getSelection()));
+      else if (clickStart && !dragged && panes[side].getSelection()?.isEmpty() &&
+        event.target.type === monaco.editor.MouseTargetType.CONTENT_TEXT && event.target.position?.lineNumber === clickStart.line &&
+        Math.hypot(event.event.posx - clickStart.x, event.event.posy - clickStart.y) <= 3) {
+        onCommentClick(side, clickStart.line, event.target.position.column);
+      }
+      clickStart = null;
       gutterSelected = false;
     }));
     listeners.push(panes[side].onKeyUp(event => {
-      if (event.keyCode === monaco.KeyCode.Shift && selectedText()) onSelectionComplete();
+      if (event.keyCode === monaco.KeyCode.Shift && selectedText()) onSelectionComplete(models[side].getValueInRange(panes[side].getSelection()));
     }));
   }
   listeners.push(editor.onDidUpdateDiff(() => {
     changes = editor.getLineChanges() || [];
     onChanges(changes.length);
+    onViewportChange();
     const initialEntry = entry;
     entry = null;
     activate(changes.length ? initialEntry === 'previous' ? changes.length - 1 : Math.max(0, Math.min(current, changes.length - 1)) : -1, !!initialEntry);
   }));
+  const anchorRange = (anchor, side) => new monaco.Range(anchor.startLine, anchor.startColumn ?? 1, anchor.endLine, anchor.endColumn ?? models[side].getLineMaxColumn(anchor.endLine));
   return {
     paint(selection, comments) {
       for (const side of ['old', 'new']) {
-        const items = comments.filter(comment => comment.side === side).map(comment => ({
-          range: new monaco.Range(comment.startLine, 1, comment.endLine, 1),
+        const items = comments.filter(comment => comment.side === side).flatMap(comment => [{
+          range: new monaco.Range(comment.startLine, 1, comment.endColumn === 1 && comment.endLine > comment.startLine ? comment.endLine - 1 : comment.endLine, 1),
           options: { isWholeLine: true, glyphMarginClassName: 'review-comment-marker', linesDecorationsClassName: 'review-comment-line' },
-        }));
+        }, {
+          range: anchorRange(comment, side),
+          options: { inlineClassName: comment.resolved ? 'review-comment-underline review-comment-resolved' : 'review-comment-underline' },
+        }]);
         if (selection?.side === side) items.push({
-          range: new monaco.Range(selection.startLine, 1, selection.endLine, 1),
-          options: { isWholeLine: true, className: 'review-selected-line' },
+          range: anchorRange(selection, side),
+          options: selection.startColumn !== undefined
+            ? { className: 'review-selected-content', inlineClassName: 'review-selected-content-text', linesDecorationsClassName: selection.commentId ? 'review-comment-target-margin' : undefined }
+            : { isWholeLine: true, className: selection.commentId ? 'review-selected-line review-comment-target' : 'review-selected-line', linesDecorationsClassName: selection.commentId ? 'review-comment-target-margin' : undefined },
         });
         decorations[side].set(items);
       }
@@ -158,10 +180,22 @@ export function createComparison(container, { file, versions, onSelect, onSelect
       try {
         editor.updateOptions({ hideUnchangedRegions: { enabled: false } });
         const pane = panes[selection.side];
-        pane.setSelection(new monaco.Range(selection.startLine, 1, selection.endLine, models[selection.side].getLineMaxColumn(selection.endLine)));
+        pane.setSelection(anchorRange(selection, selection.side));
         pane.revealLineInCenter(selection.startLine);
         pane.focus();
       } finally { silent = false; }
+    },
+    anchorRect(selection) {
+      const pane = panes[selection.side];
+      const bounds = pane.getDomNode().getBoundingClientRect();
+      const start = pane.getScrolledVisiblePosition({ lineNumber: selection.startLine, column: selection.startColumn ?? 1 });
+      const end = pane.getScrolledVisiblePosition({ lineNumber: selection.endLine, column: selection.endColumn ?? 1 });
+      return {
+        left: bounds.left + (start?.left ?? pane.getLayoutInfo().contentLeft),
+        top: bounds.top + (start?.top ?? 0),
+        bottom: bounds.top + (end ? end.top + end.height : bounds.height),
+        viewportTop: bounds.top, viewportBottom: bounds.bottom,
+      };
     },
     navigate,
     options({ wrap, collapse }) {

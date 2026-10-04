@@ -139,6 +139,27 @@ test('full versions are historical, bounded, and reject unsupported objects', as
   assert.match((await repo.file(subDiff, subDiff.files.find(file => file.path === 'submodule').id)).unavailable, /子模块/);
 });
 
+test('precise anchors validate columns and derive historical selected text', async t => {
+  const { repo, put, commit } = await fixture(t);
+  await put('selection.txt', 'ab中文😀\tz\r\nsecond\r\n');
+  const diff = await repo.diff(commit('selection'));
+  const versions = await repo.file(diff, '0');
+  const anchor = { fileId: '0', side: 'new', startLine: 1, endLine: 1, startColumn: 3, endColumn: 7 };
+  const select = patch => validateAnchor(diff, { ...anchor, ...patch }, versions);
+  assert.equal(select({ code: 'forged' }).code, '中文😀');
+  assert.equal(select({ startColumn: 7, endColumn: 8 }).code, '\t');
+  assert.equal(select({ endLine: 2, endColumn: 4 }).code, '中文😀\tz\nsec');
+  assert.equal(select({ endLine: 2, endColumn: 1 }).code, '中文😀\tz\n');
+  assert.equal(select({ startLine: 2, startColumn: 7, endLine: 3, endColumn: 1 }).code, '\n');
+  assert.equal(validateAnchor(diff, { fileId:'0', side:'new', startLine:1, endLine:1 }, versions).code, 'ab中文😀\tz');
+  for (const patch of [{startColumn:0}, {startColumn:6}, {endColumn:6}, {endColumn:10}, {endColumn:3}, {endColumn:2}, {endColumn:null}, {startColumn:1.5}, {endLine:4}, {endLine:3,endColumn:2}]) assert.throws(() => select(patch));
+  assert.throws(() => validateAnchor(diff, {fileId:'0',side:'new',startLine:1,endLine:1,startColumn:1}, versions));
+  assert.throws(() => validateAnchor(diff, anchor));
+  const many = { ...versions, new: { ...versions.new, text: 'x\n'.repeat(201) } };
+  assert.equal(validateAnchor(diff, {...anchor,startColumn:1,endLine:201,endColumn:1}, many).code, 'x\n'.repeat(200));
+  assert.throws(() => validateAnchor(diff, {...anchor,startColumn:1,endLine:201,endColumn:2}, many));
+});
+
 test('large files explicitly truncate and reject hidden-line anchors', async t => {
   const { repo, put, commit } = await fixture(t);
   await put('large.txt', Array.from({ length: 6200 }, (_, i) => `line ${i}`).join('\n'));

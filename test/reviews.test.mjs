@@ -36,6 +36,23 @@ test('comments persist CRUD, resolve state and concurrent writes', async t => {
   assert.equal(store.list().length, 12, 'failed mutation does not poison write queue');
 });
 
+test('precise anchors persist alongside unchanged legacy comments', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'review-columns-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = await ReviewStore.open(root, '/example/repo');
+  const legacy = await store.add(input);
+  const precise = await store.add({ ...input, anchor: {...input.anchor, startColumn:2, endColumn:3, code:'ne\ntw'} });
+  await store.update(precise.id, {resolved:true});
+  const loaded = (await ReviewStore.open(root, '/example/repo')).list();
+  assert.deepEqual(loaded[0], legacy);
+  assert.equal(loaded[1].startColumn, 2);
+  assert.equal(loaded[1].endColumn, 3);
+  assert.equal(loaded[1].code, 'ne\ntw');
+  const markdown = await readFile(store.markdownPath, 'utf8');
+  assert.match(markdown, /1:2–2:3（UTF-16 列，1 起始，结束位置不包含）/);
+  assert.match(markdown, /new 1–2\n/);
+});
+
 test('validation rejects invalid body and arbitrary patches', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'review-store-'));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -61,6 +61,15 @@ test('HTTP review workflow and exported AI context', async t => {
   assert.match(await readFile(info.markdownPath, 'utf8'), /已解决/);
   assert.equal((await request(`/api/comments/${comment.id}`, 'DELETE')).status, 200);
   assert.equal((await (await request('/api/comments')).json()).length, 0);
+  const preciseResponse = await request('/api/comments', 'POST', {sha, anchor:{...anchor,startColumn:3,endColumn:4,code:'forged'},body:'精确选区'});
+  assert.equal(preciseResponse.status, 201);
+  const precise = await preciseResponse.json();
+  assert.equal(precise.code, 'rst\nsec');
+  assert.equal(precise.startColumn, 3);
+  assert.equal(precise.endColumn, 4);
+  for (const columns of [{startColumn:1}, {startColumn:0,endColumn:2}, {startColumn:1,endColumn:99}]) {
+    assert.equal((await request('/api/comments', 'POST', {sha,anchor:{...anchor,...columns},body:'bad'})).status,400);
+  }
   assert.equal(git('rev-parse', 'HEAD'), before);
 });
 

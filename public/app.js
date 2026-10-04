@@ -5,6 +5,9 @@ const state = { info: null, commits: [], comments: [], diff: null, selection: nu
 
 const drafts = new Map();
 const draftKey = () => `${state.diff?.sha}:${state.file?.id}`;
+const anchorLabel = anchor => anchor.startColumn === undefined ? `第 ${anchor.startLine}–${anchor.endLine} 行` : `${anchor.startLine}:${anchor.startColumn}–${anchor.endLine}:${anchor.endColumn}（行:列，末端不含）`;
+const containsPosition = (anchor, line, column) => line >= anchor.startLine && line <= anchor.endLine &&
+  (anchor.startColumn === undefined || ((line > anchor.startLine || column >= anchor.startColumn) && (line < anchor.endLine || column < anchor.endColumn)));
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -99,6 +102,8 @@ async function loadDiff(sha) {
   }
 }
 function disposeEditor() {
+  state.disposeComposer?.();
+  state.disposeComposer = null;
   state.fileGeneration++;
   state.editor?.dispose();
   state.editor = null;
@@ -206,11 +211,95 @@ async function loadFile(fileId, entry = null) {
   viewport.append(container); card.append(viewport);
   const key = draftKey();
   const actions = el('form', 'selection-actions'); actions.hidden = true; actions.dataset.actions = file.id;
+  actions.setAttribute('aria-label', '选区评论');
+  const preview = el('section', 'comment-preview'); preview.hidden = true;
+  preview.setAttribute('aria-label', '代码评论');
+  let previewAnchor = null, previewSignature = '';
+  const matchingComments = () => previewAnchor ? state.comments.filter(comment => comment.sha === diff.sha && comment.fileId === file.id &&
+    comment.side === previewAnchor.side && containsPosition(comment, previewAnchor.startLine, previewAnchor.startColumn)) : [];
+  const closePreview = () => { preview.hidden = true; previewAnchor = null; previewSignature = ''; };
+  const updatePreview = () => {
+    if (!previewAnchor) return;
+    const comments = matchingComments();
+    if (!comments.length) { closePreview(); return; }
+    const signature = JSON.stringify(comments);
+    if (signature === previewSignature) return;
+    previewSignature = signature;
+    const heading = el('div', 'comment-preview-heading');
+    heading.append(el('strong', '', `${comments.length} 条评论`), button('关闭', closePreview));
+    preview.replaceChildren(heading);
+    for (const comment of comments) {
+      const item = el('article', 'comment-preview-item');
+      item.append(el('div', 'comment-preview-meta', `${comment.side === 'old' ? '旧版本' : '新版本'} · ${anchorLabel(comment)} · ${comment.resolved ? '已解决' : '未解决'}`), el('p', '', comment.body));
+      preview.append(item);
+    }
+  };
+  let positionFrame = 0;
+  const positionComposer = () => {
+    positionFrame = 0;
+    if (generation !== state.fileGeneration || !state.editor) return;
+    updatePreview();
+    const popup = !preview.hidden ? preview : actions;
+    const selection = !preview.hidden ? previewAnchor : drafts.get(key)?.anchor;
+    if (popup.hidden || !selection) return;
+    const anchor = state.editor.anchorRect(selection);
+    const visual = window.visualViewport;
+    const left = (visual?.offsetLeft || 0) + 8, top = (visual?.offsetTop || 0) + 8;
+    const right = left + (visual?.width || innerWidth) - 16;
+    const bottom = top + (visual?.height || innerHeight) - 16;
+    popup.style.width = `${Math.min(380, right - left)}px`;
+    popup.style.maxHeight = `${bottom - top}px`;
+    const height = popup.getBoundingClientRect().height;
+    const visibleTop = Math.max(top, anchor.viewportTop);
+    const visibleBottom = Math.min(bottom, anchor.viewportBottom);
+    const below = Math.max(visibleTop, Math.min(anchor.bottom, visibleBottom)) + 8;
+    const above = Math.max(visibleTop, Math.min(anchor.top, visibleBottom)) - height - 8;
+    const y = below + height <= bottom ? below : above;
+    popup.style.left = `${Math.max(left, Math.min(anchor.left, right - popup.getBoundingClientRect().width))}px`;
+    popup.style.top = `${Math.max(top, Math.min(y, bottom - height))}px`;
+  };
+  const schedulePosition = () => {
+    if (!positionFrame) positionFrame = requestAnimationFrame(positionComposer);
+  };
+  const dismissComposer = event => {
+    if (!preview.hidden && !preview.contains(event.target)) closePreview();
+    if (actions.hidden || actions.contains(event.target)) return;
+    const draft = drafts.get(key);
+    if (draft) draft.dismissed = true;
+    actions.hidden = true;
+  };
+  document.addEventListener('pointerdown', dismissComposer, true);
+  const composerObserver = new ResizeObserver(schedulePosition);
+  composerObserver.observe(actions);
+  composerObserver.observe(preview);
+  window.addEventListener('resize', schedulePosition);
+  document.addEventListener('scroll', schedulePosition, true);
+  window.visualViewport?.addEventListener('resize', schedulePosition);
+  window.visualViewport?.addEventListener('scroll', schedulePosition);
+  state.positionComposer = schedulePosition;
+  state.disposeComposer = () => {
+    cancelAnimationFrame(positionFrame);
+    composerObserver.disconnect();
+    document.removeEventListener('pointerdown', dismissComposer, true);
+    window.removeEventListener('resize', schedulePosition);
+    document.removeEventListener('scroll', schedulePosition, true);
+    window.visualViewport?.removeEventListener('resize', schedulePosition);
+    window.visualViewport?.removeEventListener('scroll', schedulePosition);
+    actions.remove(); preview.remove();
+    state.positionComposer = null;
+  };
   const label = el('label', 'selection-description'); label.htmlFor = 'inline-comment-body';
   const input = el('textarea'); input.id = 'inline-comment-body'; input.rows = 2; input.required = true; input.maxLength = 10000;
   input.placeholder = '写下评论…（⌘ / Ctrl + Enter 保存）';
   input.value = drafts.get(key)?.body || '';
   input.addEventListener('input', () => { const draft = drafts.get(key); if (draft) draft.body = input.value; });
+  input.addEventListener('copy', event => {
+    const draft = drafts.get(key);
+    // Preserve normal comment-text copying once the user has started writing.
+    if (input.value || !draft?.copyText || !event.clipboardData) return;
+    event.clipboardData.setData('text/plain', draft.copyText);
+    event.preventDefault();
+  });
   const save = el('button', 'primary', '保存评论'); save.type = 'submit';
   const error = el('span', 'form-error'); error.setAttribute('role', 'alert');
   const cancel = button('取消', () => { drafts.delete(key); input.value = ''; error.textContent = ''; state.selection = null; paintSelection(); });
@@ -236,16 +325,32 @@ async function loadFile(fileId, entry = null) {
   });
   if (drafts.get(key)?.saving) input.disabled = save.disabled = cancel.disabled = true;
   state.selection = drafts.get(key)?.anchor || null;
-  card.append(actions);
+  document.body.append(actions, preview);
   state.editor = createComparison(container, {
     file, versions, entry, wrap: state.wrap, collapse: state.collapse,
     onBoundary: direction => run(() => navigateFile(direction)),
-    onSelect: (side, start, end, extend) => selectLines(file, side, start, end, extend),
-    onSelectionComplete: () => {
+    onViewportChange: schedulePosition,
+    onSelect: (side, start, end, extend, columns) => { closePreview(); return selectLines(file, side, start, end, extend, columns); },
+    onCommentClick: (side, line, column) => {
+      previewAnchor = { side, startLine: line, endLine: line, startColumn: column, endColumn: column };
+      updatePreview();
+      if (!previewAnchor) return;
+      const draft = drafts.get(key);
+      if (draft) draft.dismissed = true;
+      actions.hidden = true;
+      preview.hidden = false;
+      positionComposer();
+    },
+    onSelectionComplete: selectedText => {
+      const draft = drafts.get(key);
+      if (draft) {
+        const anchor = draft.anchor;
+        draft.copyText = selectedText ?? versions[anchor.side].text.split('\n').slice(anchor.startLine - 1, anchor.endLine).join('\n');
+      }
       requestAnimationFrame(() => {
         if (generation !== state.fileGeneration || state.diff !== diff || actions.hidden || input.disabled) return;
+        positionComposer();
         input.focus({ preventScroll: true });
-        input.scrollIntoView({ block: 'nearest' });
       });
     },
     onChanges: amount => { count.textContent = `${amount} 处变更`; },
@@ -253,11 +358,22 @@ async function loadFile(fileId, entry = null) {
   });
   paintSelection();
 }
-function selectLines(file, side, startLine, endLine, extend) {
-  if (!state.versions?.[side]?.exists || endLine > state.versions[side].lineCount) return;
+function selectLines(file, side, startLine, endLine, extend, columns) {
+  if (!state.versions?.[side]?.exists) return;
+  const lineCount = columns ? state.versions[side].text.split(/\r\n|\r|\n/).length : state.versions[side].lineCount;
+  if (endLine > lineCount) return;
   const draft = drafts.get(draftKey());
-  if (draft?.saving || draft?.body.trim()) {
-    notice('请先保存或取消当前草稿，再更改评论行范围。', true); return;
+  if (draft?.saving) return;
+  if (draft?.body.trim()) {
+    draft.dismissed = false;
+    state.selection = { ...draft.anchor };
+    paintSelection();
+    notice('已恢复原评论草稿；保存或取消后才能更改行范围。');
+    requestAnimationFrame(() => {
+      const input = $('#inline-comment-body');
+      if (state.file?.id === file.id && drafts.get(draftKey()) === draft && !draft.dismissed) input?.focus({ preventScroll: true });
+    });
+    return;
   }
   const previous = state.selection;
   if (extend && previous && (previous.fileId !== file.id || previous.side !== side)) {
@@ -265,32 +381,34 @@ function selectLines(file, side, startLine, endLine, extend) {
   }
   const base = extend && previous ? previous.base : startLine;
   startLine = Math.min(base, startLine); endLine = Math.max(base, endLine);
-  if (endLine - startLine >= 200) { notice('单条评论最多选择 200 行。', true); return; }
-  state.selection = { fileId: file.id, side, base, startLine, endLine };
+  const lastCoveredLine = columns?.endColumn === 1 && endLine > startLine ? endLine - 1 : endLine;
+  if (lastCoveredLine - startLine >= 200) { notice('单条评论最多选择 200 行。', true); return; }
+  state.selection = { fileId: file.id, side, base, startLine, endLine, ...columns };
   drafts.set(draftKey(), { anchor: { ...state.selection }, body: draft?.body || '', saving: false });
   notice(''); paintSelection();
   return true;
 }
 function paintSelection() {
   const selection = state.selection;
-  state.editor?.paint(selection, state.comments.filter(comment => !comment.resolved && comment.sha === state.diff?.sha && comment.fileId === state.file?.id));
+  state.editor?.paint(selection, state.comments.filter(comment => comment.sha === state.diff?.sha && comment.fileId === state.file?.id));
   document.querySelectorAll('[data-actions]').forEach(node => {
     const draft = drafts.get(draftKey());
-    node.hidden = !draft || node.dataset.actions !== draft.anchor.fileId;
+    node.hidden = !draft || !!draft.dismissed || node.dataset.actions !== draft.anchor.fileId;
     if (!node.hidden) {
       const anchor = draft.anchor;
-      node.querySelector('label').textContent = `${state.file.path} · ${anchor.side === 'old' ? '旧版本' : '新版本'} · 第 ${anchor.startLine}–${anchor.endLine} 行`;
+      node.querySelector('label').textContent = `${state.file.path} · ${anchor.side === 'old' ? '旧版本' : '新版本'} · ${anchorLabel(anchor)}`;
       node.querySelector('textarea').disabled = !!draft.saving;
       node.querySelectorAll('button').forEach(button => { button.disabled = !!draft.saving; });
     }
   });
+  state.positionComposer?.();
 }
 function openComment(comment) {
   state.editing = comment;
   $('#form-error').textContent = '';
   $('#dialog-title').textContent = '编辑评论';
   $('#comment-body').value = comment.body;
-  $('#selection-label').textContent = `${comment.path} · ${comment.side} ${comment.startLine}–${comment.endLine}`;
+  $('#selection-label').textContent = `${comment.path} · ${comment.side} ${anchorLabel(comment)}`;
   $('#selection-code').textContent = comment.code;
   $('#comment-dialog').showModal();
   $('#comment-body').focus();
@@ -316,15 +434,17 @@ function renderComments() {
       if (!file) { notice('此评论对应文件不在当前显示范围内。', true); return; }
       if (state.file?.id !== file.id || !state.editor) await loadFile(file.id);
       if (state.diff?.sha !== comment.sha || state.file?.id !== file.id || !state.editor) return;
-      if (comment.endLine > state.versions[comment.side].lineCount) { notice('无法定位历史行；原始片段仍保存在评论文件中。', true); return; }
-      state.selection = { fileId: file.id, side: comment.side, base: comment.startLine, startLine: comment.startLine, endLine: comment.endLine };
+      const lineCount = comment.startColumn === undefined ? state.versions[comment.side].lineCount : state.versions[comment.side].text.split(/\r\n|\r|\n/).length;
+      if (comment.endLine > lineCount) { notice('无法定位历史行；原始片段仍保存在评论文件中。', true); return; }
+      state.selection = { fileId: file.id, side: comment.side, base: comment.startLine, startLine: comment.startLine, endLine: comment.endLine, commentId: comment.id,
+        ...(comment.startColumn === undefined ? {} : {startColumn:comment.startColumn,endColumn:comment.endColumn}) };
       state.collapse = false;
       $('#collapse-lines').checked = false;
       state.editor.reveal(state.selection);
       paintSelection();
       document.getElementById(`file-${file.id}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-    const anchor = button(`${comment.sha.slice(0, 8)} · ${comment.path}\n${comment.side} ${comment.startLine}–${comment.endLine}`, jumpToComment, 'comment-anchor');
+    const anchor = button(`${comment.sha.slice(0, 8)} · ${comment.path}\n${comment.side} ${anchorLabel(comment)}`, jumpToComment, 'comment-anchor');
     const body = button(comment.body, jumpToComment, 'comment-body-link');
     body.title = '跳转到评论对应的代码行';
     card.addEventListener('click', event => {

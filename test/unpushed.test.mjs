@@ -49,6 +49,18 @@ test('unpushed range, pagination, first-parent merges and pushed history', async
   await assert.rejects(repo.commits('origin/main'), /本地分支/);
 });
 
+test('commit messages retain multiline bodies without breaking pagination', async t => {
+  const {git, repo} = await fixture(t);
+  git('commit', '--allow-empty', '-m', 'Title with body', '-m', '第一段\n\n<script>plain text</script>\nCo-Authored-By: Test <test@example.invalid>');
+  git('commit', '--allow-empty', '-m', 'Title only');
+  const result = await repo.commits();
+  assert.equal(result.commits.length, 2);
+  assert.equal(result.commits[0].body, '');
+  assert.equal(result.commits[1].subject, 'Title with body');
+  assert.equal(result.commits[1].body, '第一段\n\n<script>plain text</script>\nCo-Authored-By: Test <test@example.invalid>\n');
+  assert.deepEqual((await repo.commits('main', 1, 1)).commits, [result.commits[1]]);
+});
+
 test('missing upstream and detached HEAD never fall back to full history', async t => {
   const { git, repo } = await fixture(t);
   git('checkout', '-b', 'untracked');

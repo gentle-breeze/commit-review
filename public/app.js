@@ -39,7 +39,51 @@ function date(value) { return new Date(value).toLocaleString('zh-CN', { hour12: 
 function empty(target, message) { target.replaceChildren(el('div', 'empty', message)); }
 async function run(action) { try { await action(); } catch (error) { notice(error.message, true); } }
 
+const commitPreview = el('aside', 'commit-preview');
+commitPreview.id = 'commit-message-preview';
+commitPreview.hidden = true;
+commitPreview.setAttribute('role', 'tooltip');
+document.body.append(commitPreview);
+let commitPreviewOwner = null, commitPreviewTimer;
+function hideCommitPreview() {
+  clearTimeout(commitPreviewTimer);
+  commitPreviewOwner?.removeAttribute('aria-describedby');
+  commitPreviewOwner = null;
+  commitPreview.hidden = true;
+}
+function scheduleCommitPreviewClose() {
+  clearTimeout(commitPreviewTimer);
+  commitPreviewTimer = setTimeout(hideCommitPreview, 180);
+}
+function showCommitPreview(node, commit) {
+  hideCommitPreview();
+  commitPreviewOwner = node;
+  node.setAttribute('aria-describedby', commitPreview.id);
+  const body = el('pre', 'commit-preview-body', commit.body?.trim() ? commit.body : '此提交没有正文。');
+  commitPreview.replaceChildren(el('strong', '', commit.subject), body);
+  commitPreview.hidden = false;
+  const viewport = window.visualViewport;
+  const left = (viewport?.offsetLeft || 0) + 8, top = (viewport?.offsetTop || 0) + 8;
+  const right = left + (viewport?.width || innerWidth) - 16, bottom = top + (viewport?.height || innerHeight) - 16;
+  commitPreview.style.width = `${Math.min(440, right - left)}px`;
+  commitPreview.style.maxHeight = `${Math.min(420, bottom - top)}px`;
+  const anchor = node.getBoundingClientRect(), bounds = commitPreview.getBoundingClientRect();
+  const x = anchor.right + 8 + bounds.width <= right ? anchor.right + 8 : anchor.left - bounds.width - 8;
+  commitPreview.style.left = `${Math.max(left, Math.min(x, right - bounds.width))}px`;
+  commitPreview.style.top = `${Math.max(top, Math.min(anchor.top, bottom - bounds.height))}px`;
+}
+commitPreview.addEventListener('pointerenter', () => clearTimeout(commitPreviewTimer));
+commitPreview.addEventListener('pointerleave', scheduleCommitPreviewClose);
+document.addEventListener('pointerdown', event => {
+  if (!commitPreview.contains(event.target) && !commitPreviewOwner?.contains(event.target)) hideCommitPreview();
+}, true);
+document.addEventListener('keydown', event => { if (event.key === 'Escape') hideCommitPreview(); });
+document.addEventListener('scroll', event => { if (!commitPreview.contains(event.target)) hideCommitPreview(); }, true);
+window.addEventListener('resize', hideCommitPreview);
+window.visualViewport?.addEventListener('resize', hideCommitPreview);
+window.visualViewport?.addEventListener('scroll', hideCommitPreview);
 function renderCommits() {
+  hideCommitPreview();
   const target = $('#commits');
   target.replaceChildren();
   for (const commit of state.commits) {
@@ -48,6 +92,11 @@ function renderCommits() {
     const meta = el('span', 'commit-meta');
     meta.append(el('code', '', commit.sha.slice(0, 8)), el('span', '', commit.author), el('span', '', date(commit.date)));
     node.append(meta);
+    node.addEventListener('pointerenter', () => showCommitPreview(node, commit));
+    node.addEventListener('pointerleave', scheduleCommitPreviewClose);
+    node.addEventListener('focus', () => showCommitPreview(node, commit));
+    node.addEventListener('blur', hideCommitPreview);
+    node.addEventListener('click', hideCommitPreview);
     target.append(node);
   }
   if (!state.commits.length) empty(target, state.historyMessage || '没有未 push 的提交');
@@ -468,6 +517,7 @@ function renderComments() {
 let focusDiff = false;
 let commentsOpen = false;
 function updatePanels() {
+  hideCommitPreview();
   $('.workspace').classList.toggle('focus-diff', focusDiff);
   $('.topbar').hidden = focusDiff;
   $('#commit-detail').hidden = focusDiff;

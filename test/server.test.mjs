@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, readFile, access, mkdir, realpath } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import http from 'node:http';
@@ -97,4 +97,108 @@ test('HTTP rejects cross-site requests, forged anchors and traversal', async t =
 test('one writer per repository/data directory', async t => {
   const { root, dataDir } = await fixture(t);
   await assert.rejects(createApp({ repoPath: root, dataDir }), /已被占用/);
+});
+
+async function pickerFixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'review-picker-'));
+  const dataDir = path.join(root, 'data');
+  const app = await createApp({ dataDir, projectsDir: root });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const info = await (await fetch(`${base}/api/info`)).json();
+  const request = (route, method = 'GET', body, headers = {}) => fetch(base + route, { method, headers: {
+    'X-Review-Token': info.token, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...headers,
+  }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  const repository = async name => {
+    const target = path.join(root, name);
+    await mkdir(target);
+    execFileSync('git', ['-C', target, 'init', '-b', 'main'], { stdio: 'pipe' });
+    return target;
+  };
+  t.after(async () => {
+    await new Promise(resolve => app.server.close(resolve));
+    await app.release();
+    await rm(root, { recursive: true, force: true });
+  });
+  return { root, dataDir, app, base, info, request, repository };
+}
+
+test('optional repository starts idle, validates selection and preserves the selected project', async t => {
+  const { root, dataDir, app, base, info, request, repository } = await pickerFixture(t);
+  assert.equal(info.repository, null);
+  assert.equal(info.jsonPath, null);
+  assert.equal(info.markdownPath, null);
+  assert.equal(typeof info.token, 'string');
+  assert.equal(app.repo, undefined);
+  await assert.rejects(access(dataDir), { code: 'ENOENT' });
+  assert.equal((await request('/')).status, 200);
+  for (const route of ['/api/branches', '/api/commits', '/api/diff', '/api/file', '/api/comments']) {
+    const response = await request(route);
+    assert.equal(response.status, 409);
+    assert.match((await response.json()).error, /请先选择/);
+  }
+  assert.equal((await fetch(`${base}/api/repository`, { method: 'POST' })).status, 403);
+  assert.equal((await request('/api/repository', 'POST', { repository: root }, { Origin: 'https://evil.invalid' })).status, 403);
+  for (const body of [null, {}, { repository: 123 }, { repository: ' ' }, { repository: path.join(root, 'missing') }, { repository: root }]) {
+    assert.equal((await request('/api/repository', 'POST', body)).status, 400);
+    assert.equal((await (await request('/api/info')).json()).repository, null);
+  }
+  await assert.rejects(access(dataDir), { code: 'ENOENT' });
+  assert.equal((await fetch(`${base}/api/repositories`)).status, 403);
+  assert.equal((await request('/api/repositories', 'GET', undefined, { Origin: 'https://evil.invalid' })).status, 403);
+  assert.deepEqual((await (await request('/api/repositories')).json()).projects, []);
+  const target = await repository('项目 with spaces');
+  const listing = await (await request('/api/repositories')).json();
+  assert.equal(listing.directory, await realpath(root));
+  assert.deepEqual(listing.projects, [{ name: '项目 with spaces', path: await realpath(target) }]);
+  await assert.rejects(access(dataDir), { code: 'ENOENT' });
+  const response = await request('/api/repository', 'POST', { repository: target });
+  assert.equal(response.status, 200);
+  const selected = await response.json();
+  assert.equal(selected.repository, await realpath(target));
+  assert.equal(selected.token, info.token);
+  assert.equal(app.repo.path, selected.repository);
+  assert.equal(app.store.jsonPath, selected.jsonPath);
+  assert.deepEqual(await (await request('/api/info')).json(), selected);
+  assert.deepEqual(await (await request('/api/comments')).json(), []);
+  assert.equal((await request('/api/branches')).status, 200);
+  assert.equal((await request('/api/commits')).status, 200);
+  assert.equal((await request('/api/repository', 'POST', { repository: path.join(target, '.') })).status, 200);
+  const other = await repository('other');
+  const rejected = await request('/api/repository', 'POST', { repository: other });
+  assert.equal(rejected.status, 400);
+  assert.match((await rejected.json()).error, /重启服务/);
+  assert.deepEqual(await (await request('/api/info')).json(), selected);
+  await assert.rejects(createApp({ repoPath: target, dataDir }), /已被占用/);
+  await app.release();
+  const reopened = await createApp({ repoPath: target, dataDir });
+  try {
+    await app.release();
+    await assert.rejects(createApp({ repoPath: target, dataDir }), /已被占用/);
+  } finally { await reopened.release(); }
+});
+
+test('repository selection serializes concurrent requests and retries after a lock failure', async t => {
+  const { dataDir, request, repository } = await pickerFixture(t);
+  const target = await repository('target');
+  const owner = await createApp({ repoPath: target, dataDir });
+  try {
+    const blocked = await request('/api/repository', 'POST', { repository: target });
+    assert.equal(blocked.status, 400);
+    assert.match((await blocked.json()).error, /已被占用/);
+  } finally { await owner.release(); }
+  const responses = await Promise.all(Array.from({ length: 3 }, () => request('/api/repository', 'POST', { repository: target })));
+  assert.deepEqual(responses.map(response => response.status), [200, 200, 200]);
+  const other = await repository('other');
+  assert.equal((await request('/api/repository', 'POST', { repository: other })).status, 400);
+});
+
+test('concurrent different project selections bind exactly one repository', async t => {
+  const { dataDir, app, request, repository } = await pickerFixture(t);
+  const targets = await Promise.all(['first', 'second'].map(repository));
+  const responses = await Promise.all(targets.map(target => request('/api/repository', 'POST', { repository: target })));
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 400]);
+  const unselected = targets.find(target => path.basename(app.repo.path) !== path.basename(target));
+  const other = await createApp({ repoPath: unselected, dataDir });
+  await other.release();
 });

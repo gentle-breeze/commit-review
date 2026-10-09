@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { GitRepo, validateAnchor } from './lib/git.mjs';
 import { ReviewStore } from './lib/reviews.mjs';
+import { discoverProjects } from './lib/projects.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const staticFiles = new Map([
@@ -39,26 +40,44 @@ function numberParam(value, fallback, maximum) {
   return Number(value);
 }
 
-export async function createApp({ repoPath, dataDir = path.join(directory, '.reviews') }) {
-  const repo = await GitRepo.open(repoPath);
-  const key = createHash('sha256').update(repo.path).digest('hex').slice(0, 20);
-  await mkdir(dataDir, { recursive: true, mode: 0o700 });
-  const lock = path.join(dataDir, `${key}.lock`);
-  try { await mkdir(lock, { mode: 0o700 }); }
-  catch (error) {
-    if (error.code === 'EEXIST') throw new Error(`此仓库的评论目录已被占用。请先关闭另一实例。若上次异常退出，确认无运行实例后删除锁目录：${lock}`);
-    throw error;
-  }
-  let store;
-  try {
-    await writeFile(path.join(lock, 'pid'), String(process.pid));
-    store = await ReviewStore.open(dataDir, repo.path);
-  } catch (error) { await rm(lock, { recursive: true, force: true }); throw error; }
+export async function createApp({ repoPath, projectsDir = path.dirname(directory), dataDir = path.join(directory, '.reviews') } = {}) {
+  let session, released = false, opening = Promise.resolve();
   const token = randomBytes(32).toString('hex');
+  const info = () => ({
+    repository: session?.repo.path ?? null, token,
+    jsonPath: session?.store.jsonPath ?? null, markdownPath: session?.store.markdownPath ?? null,
+  });
+  function openRepository(input) {
+    const result = opening.then(async () => {
+      if (released) throw new Error('服务正在关闭');
+      const repo = await GitRepo.open(input);
+      if (session) {
+        if (session.repo.path !== repo.path) throw new Error('当前服务已绑定其他项目，请重启服务后选择新项目');
+        return info();
+      }
+      const key = createHash('sha256').update(repo.path).digest('hex').slice(0, 20);
+      await mkdir(dataDir, { recursive: true, mode: 0o700 });
+      const lock = path.join(dataDir, `${key}.lock`);
+      try { await mkdir(lock, { mode: 0o700 }); }
+      catch (error) {
+        if (error.code === 'EEXIST') throw new Error(`此仓库的评论目录已被占用。请先关闭另一实例。若上次异常退出，确认无运行实例后删除锁目录：${lock}`);
+        throw error;
+      }
+      try {
+        await writeFile(path.join(lock, 'pid'), String(process.pid));
+        const store = await ReviewStore.open(dataDir, repo.path);
+        session = { repo, store, lock };
+      } catch (error) { await rm(lock, { recursive: true, force: true }); throw error; }
+      return info();
+    });
+    opening = result.catch(() => {});
+    return result;
+  }
+  if (repoPath !== undefined) await openRepository(repoPath);
   let cachedDiff;
   async function getDiff(sha) {
     if (cachedDiff?.sha === sha) return cachedDiff;
-    const result = await repo.diff(sha);
+    const result = await session.repo.diff(sha);
     cachedDiff = result;
     return result;
   }
@@ -93,13 +112,19 @@ export async function createApp({ repoPath, dataDir = path.join(directory, '.rev
           return res.end(bytes);
         } catch { return send(404, { error: '编辑器资源不存在，请运行 npm run build' }); }
       }
-      if (req.method === 'GET' && url.pathname === '/api/info') return send(200, {
-        repository: repo.path, token, jsonPath: store.jsonPath, markdownPath: store.markdownPath,
-      });
+      if (req.method === 'GET' && url.pathname === '/api/info') return send(200, info());
       // Require a token even for repository reads: another local origin must not read source code.
       const provided = Buffer.from(req.headers['x-review-token'] || '');
       const expected = Buffer.from(token);
       if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return send(403, { error: '会话已失效，请刷新页面' });
+      if (req.method === 'GET' && url.pathname === '/api/repositories') return send(200, await discoverProjects(projectsDir));
+      if (req.method === 'POST' && url.pathname === '/api/repository') {
+        const data = await readJson(req);
+        if (!data || typeof data.repository !== 'string' || !data.repository.trim()) throw new Error('请选择需要 Review 的 Git 项目');
+        return send(200, await openRepository(data.repository));
+      }
+      if (!session && url.pathname.startsWith('/api/')) return send(409, { error: '请先选择需要 Review 的 Git 项目' });
+      const { repo, store } = session || {};
       if (req.method === 'GET' && url.pathname === '/api/branches') return send(200, await repo.branches());
       if (req.method === 'GET' && url.pathname === '/api/commits') {
         return send(200, await repo.commits(url.searchParams.get('ref') || 'HEAD',
@@ -128,22 +153,29 @@ export async function createApp({ repoPath, dataDir = path.join(directory, '.rev
   });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
-  const release = () => rm(lock, { recursive: true, force: true });
-  return { server, repo, store, release };
+  let releasing;
+  const release = () => {
+    released = true;
+    return releasing ??= (async () => {
+      await opening;
+      if (session) await rm(session.lock, { recursive: true, force: true });
+    })();
+  };
+  return { server, get repo() { return session?.repo; }, get store() { return session?.store; }, release };
 }
 
 async function main() {
   const { values } = parseArgs({ options: {
     repo: { type: 'string' }, port: { type: 'string', default: '4318' },
-    'data-dir': { type: 'string' }, help: { type: 'boolean', short: 'h' },
+    'data-dir': { type: 'string' }, 'projects-dir': { type: 'string' }, help: { type: 'boolean', short: 'h' },
   } });
-  if (values.help || !values.repo) {
-    console.log('使用方式：node server.mjs --repo /absolute/path/to/repo [--port 4318] [--data-dir /path/to/data]');
-    if (!values.help) process.exitCode = 1;
+  if (values.help) {
+    console.log('使用方式：node server.mjs [--repo /absolute/path/to/repo] [--port 4318] [--data-dir /path/to/data] [--projects-dir /path/to/projects]\n未指定 --repo 时，在网页下拉框中选择项目；默认列出工具所在目录的同级 Git 项目。');
     return;
   }
   if (!/^\d+$/.test(values.port) || Number(values.port) < 1 || Number(values.port) > 65535) throw new Error('端口必须为 1–65535');
-  const app = await createApp({ repoPath: values.repo, dataDir: values['data-dir'] && path.resolve(values['data-dir']) });
+  const app = await createApp({ repoPath: values.repo, dataDir: values['data-dir'] && path.resolve(values['data-dir']),
+    projectsDir: values['projects-dir'] && path.resolve(values['projects-dir']) });
   app.server.on('error', async error => {
     console.error(error.code === 'EADDRINUSE' ? '端口已被占用，请使用 --port 指定其他端口' : error.message);
     await app.release();
@@ -154,7 +186,8 @@ async function main() {
     app.server.closeIdleConnections();
   });
   app.server.listen(Number(values.port), '127.0.0.1', () => {
-    console.log(`\nCommit Review → http://127.0.0.1:${values.port}\n仓库：${app.repo.path}\nAI 评论文件：${app.store.markdownPath}\n按 Ctrl+C 停止。\n`);
+    const target = app.repo ? `仓库：${app.repo.path}\nAI 评论文件：${app.store.markdownPath}` : '请在网页中选择需要 Review 的 Git 项目。';
+    console.log(`\nCommit Review → http://127.0.0.1:${values.port}\n${target}\n按 Ctrl+C 停止。\n`);
   });
 }
 

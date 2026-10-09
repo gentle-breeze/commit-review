@@ -1,6 +1,6 @@
 // Optional integration check: node test/browser-smoke.mjs (requires Google Chrome on macOS).
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, mkdir, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../server.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'review-browser-'));
-let app, chrome, socket;
+let app, picker, chrome, socket;
 try {
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
   git('init', '-b', 'main'); git('config', 'user.name', 'Browser Test'); git('config', 'user.email', 'test@example.invalid');
@@ -76,6 +76,41 @@ try {
   await cdp('Page.enable');
   await cdp('Log.enable');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
+  const projectsDir = path.join(root, 'projects');
+  await mkdir(projectsDir);
+  picker = await createApp({ dataDir: path.join(root, 'picker-data'), projectsDir });
+  await new Promise(resolve => picker.server.listen(0, '127.0.0.1', resolve));
+  await cdp('Page.navigate', { url: `http://127.0.0.1:${picker.server.address().port}` });
+  await wait('document.querySelector("#project-picker")?.hidden === false && document.querySelector("#project-hint").textContent.includes("没有找到")');
+  assert.equal(await evaluate('document.querySelector("#project-path").tagName'), 'SELECT');
+  assert.equal(await evaluate('document.querySelector("#project-picker input")'), null);
+  assert.equal(await evaluate('document.querySelector("#project-path").disabled && document.querySelector("#open-project").disabled'), true);
+  await symlink(root, path.join(projectsDir, 'review-project'), 'dir');
+  await evaluate('document.querySelector("#refresh").click()');
+  await wait('!document.querySelector("#project-path").disabled && document.querySelector("#project-path").options.length === 2');
+  assert.equal(await evaluate('document.querySelector("#open-project").disabled'), true, 'placeholder cannot open a project');
+  assert.equal(await evaluate('document.querySelector(".workspace").hidden'), true);
+  assert.equal(await evaluate('["#focus-diff", "#toggle-comments", "#ai-copy"].every(s => document.querySelector(s).hidden)'), true);
+  assert.equal(await evaluate('document.activeElement.id'), 'project-path');
+  await evaluate('document.activeElement.blur()');
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'f', code: 'KeyF', windowsVirtualKeyCode: 70 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'f', code: 'KeyF' });
+  assert.equal(await evaluate('document.querySelector(".topbar").hidden'), false, 'focus shortcut is inactive before project selection');
+  assert.equal(await evaluate('document.querySelector(".workspace").classList.contains("focus-diff")'), false);
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'project picker fits a mobile viewport');
+  await evaluate('document.querySelector("#project-form").requestSubmit()');
+  assert.equal(picker.repo, undefined, 'no project opens without a selection');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await evaluate('document.querySelector("#project-path").selectedIndex=1; document.querySelector("#project-path").dispatchEvent(new Event("change"))');
+  assert.equal(await evaluate('document.querySelector("#open-project").disabled'), false);
+  await evaluate('document.querySelector("#project-form").requestSubmit()');
+  await wait('document.querySelectorAll(".monaco-editor .line-numbers").length >= 6');
+  assert.equal(await evaluate('document.querySelector("#project-picker").hidden'), true);
+  assert.equal(await evaluate('document.querySelector("#repository").textContent'), picker.repo.path);
+  await cdp('Page.reload');
+  await wait('document.querySelectorAll(".monaco-editor .line-numbers").length >= 6');
+  assert.equal(await evaluate('document.querySelector("#project-picker").hidden'), true, 'refresh retains the selected project');
   await cdp('Page.navigate', { url });
   await wait('document.querySelectorAll(".monaco-editor .line-numbers").length >= 6');
   await wait('document.querySelector(".change-count")?.textContent === "1 处变更"');
@@ -420,6 +455,7 @@ try {
 } finally {
   socket?.close();
   if (chrome && chrome.exitCode === null) { chrome.kill(); await new Promise(resolve => chrome.once('exit', resolve)); }
+  if (picker) { await new Promise(resolve => picker.server.close(resolve)); await picker.release(); }
   if (app) { await new Promise(resolve => app.server.close(resolve)); await app.release(); }
   await rm(root, { recursive: true, force: true });
 }

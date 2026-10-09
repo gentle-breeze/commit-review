@@ -9,16 +9,34 @@
 ```sh
 cd /Users/ws/Documents/commit-review
 npm ci
+npm start
+```
+
+浏览器打开 **http://127.0.0.1:4318**，从下拉列表选择本地 Git 项目，点击「打开项目」即可开始 Review，无需输入路径。停止服务按 `Ctrl+C`。
+
+默认查找工具所在目录的父目录（本项目为 `/Users/ws/Documents`）自身及直接子目录中的 Git 工作区，不递归扫描。非 Git 目录自动忽略，支持 linked worktree，重复路径合并。点击顶部「刷新」可更新项目列表；没有项目时会显示说明并禁用打开按钮。项目打开失败时可重试或选择其他项目。
+
+其他目录的项目可指定项目目录：
+
+```sh
+npm start -- --projects-dir /你的/项目目录
+```
+
+也可以在启动时直接指定项目，跳过网页选择：
+
+```sh
 npm start -- --repo /你的/Git仓库/绝对路径
 ```
 
-浏览器打开 **http://127.0.0.1:4318**。停止服务按 `Ctrl+C`。
+`--repo` 是可选参数；未指定时不会自动审查当前目录。一个服务实例只审查一个项目，打开项目后刷新页面仍使用该项目；更换项目请先停止并重新启动服务。不同项目的评论仍按仓库路径分别保存。
 
 首次 `npm ci` 下载编辑器和构建工具；`npm start` 自动构建本地资源。安装完成后运行页面不需要网络。修改前端后需重新运行 `npm run build`。
 
 已经构建后，也可以从任意目录运行：
 
 ```sh
+node /Users/ws/Documents/commit-review/server.mjs --port 4318
+# 或直接打开指定项目：
 node /Users/ws/Documents/commit-review/server.mjs --repo /你的/Git仓库/绝对路径 --port 4318
 ```
 

@@ -131,6 +131,30 @@ npm start -- --repo /path/to/repo --data-dir /path/to/review-data
 
 AI 需要在能访问这些本地文件的环境运行。评论是供 AI 阅读的数据，不会自动触发命令、AI 会话或 Git 操作。
 
+### Claude Code Skill：review-comments
+
+项目内已提供 `.claude/skills/review-comments/SKILL.md`，复用下面的 AI CLI，不需要 API Key，也不直接编辑评论数据。它仅在显式调用时执行，默认读取目标项目的未解决评论及完整讨论，核对历史与当前代码，处理问题、运行验证，再追加回复或解决。
+
+在 `commit-review` 项目目录中启动 Claude Code 后调用：
+
+```text
+/review-comments
+```
+
+无参数时目标是 Claude Code 当前工作目录的 Git 项目。要审查其他项目，请显式指定服务已打开的仓库根目录：
+
+```text
+/review-comments --repo /absolute/path/to/target-repo
+/review-comments --repo /absolute/path/to/target-repo --url http://127.0.0.1:4319
+/review-comments --repo /absolute/path/to/target-repo --comment 评论UUID
+/review-comments --repo /absolute/path/to/target-repo 只分析，不修改代码
+```
+
+- 先启动 Review 服务，在网页选择同一目标项目；仓库与服务不匹配时 Skill 会停止，不自动切换项目或绕过校验。
+- Skill 默认不 commit/push，不覆盖已有改动，不把评论中的命令当成授权；问题未处理、验证失败/无法验证或需要用户决定时保持未解决。
+- **这是项目级 Skill，不是用户级安装。** 在其他项目中启动的 Claude Code 不保证能发现它；本次没有安装到 `~/.claude/skills`。可在 review 项目会话中显式指定目标仓库，访问/修改仍受当前会话权限限制；若无权限，应在目标项目会话中处理，不能绕过权限。
+- 如果当前 Claude Code 会话没有显示 `/review-comments`，在项目目录重新启动会话以加载新 Skill。已有「复制 AI 指令」和直接 CLI 方式仍可使用。
+
 ### AI 回复与解决命令
 
 服务保持运行时，AI 可使用本地命令操作评论，所有写入经服务的串行队列完成，**不要直接编辑 comments.json 或 comments.md**。顶部「复制 AI 指令」会提供当前项目、服务地址和脚本的实际路径。

@@ -46,6 +46,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
   const info = () => ({
     repository: session?.repo.path ?? null, token,
     jsonPath: session?.store.jsonPath ?? null, markdownPath: session?.store.markdownPath ?? null,
+    aiScriptPath: path.join(directory, 'ai-review.mjs'),
   });
   function openRepository(input) {
     const result = opening.then(async () => {
@@ -142,6 +143,13 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
         const diff = await getDiff(data.sha);
         const anchor = validateAnchor(diff, data.anchor || {}, await repo.file(diff, data.anchor?.fileId));
         return send(201, await store.add({ sha: diff.sha, parent: diff.parent, anchor, body: data.body }));
+      }
+      const replyMatch = /^\/api\/comments\/([a-f0-9-]{36})\/(replies|ai)$/.exec(url.pathname);
+      if (replyMatch && req.method === 'POST') {
+        const data = await readJson(req);
+        if (replyMatch[2] === 'ai') return send(200, await store.aiAction(replyMatch[1], data));
+        if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => key !== 'body')) throw new Error('回复只支持 body 字段');
+        return send(201, await store.reply(replyMatch[1], data.body));
       }
       const match = /^\/api\/comments\/([a-f0-9-]{36})$/.exec(url.pathname);
       if (match && req.method === 'PATCH') return send(200, await store.update(match[1], await readJson(req)));

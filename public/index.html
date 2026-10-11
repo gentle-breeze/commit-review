@@ -56,7 +56,7 @@
         <select id="comment-filter" aria-label="评论状态"><option value="open">未解决</option><option value="all">全部状态</option><option value="resolved">已解决</option></select>
       </div>
       <div id="comments" class="comment-list"></div>
-      <details class="ai-details"><summary>AI 如何读取评论？</summary><p>评论实时保存到本地，代码和评论不会上传。点击顶部按钮，将指令粘贴给 Claude Code。</p><p>Markdown 文件：</p><code id="markdown-path"></code><p>JSON 文件：</p><code id="json-path"></code><p>修改前请让 AI 核对当前 HEAD 与历史 commit，避免覆盖已有改动。</p></details>
+      <details class="ai-details"><summary>AI 如何读取评论？</summary><p>评论实时保存到本地，代码和评论不会上传。点击顶部按钮，将指令粘贴给 Claude Code。AI 可通过本地工具回复、解决或重新打开评论；不要直接修改导出文件。页面每 5 秒同步评论，输入回复时暂停同步。</p><p>Markdown 文件：</p><code id="markdown-path"></code><p>JSON 文件：</p><code id="json-path"></code><p>修改前请让 AI 核对当前 HEAD 与历史 commit，避免覆盖已有改动。</p></details>
     </aside>
   </main>
   <dialog id="comment-dialog">
@@ -68,6 +68,17 @@
       <textarea id="comment-body" maxlength="10000" rows="6" required placeholder="例如：这里没有处理空数组，请补充边界检查和测试。"></textarea>
       <p id="form-error" class="form-error" role="alert"></p>
       <div class="dialog-actions"><span>⌘ / Ctrl + Enter 保存</span><button id="save-comment" type="submit" class="primary">保存评论</button></div>
+    </form>
+  </dialog>
+  <dialog id="reply-dialog">
+    <form id="reply-form">
+      <div class="dialog-heading"><h2>回复评论</h2><button type="button" id="cancel-reply" aria-label="关闭回复窗口">×</button></div>
+      <p id="reply-context" class="selection-label"></p>
+      <div id="reply-history"></div>
+      <label for="reply-body" class="field-label">继续讨论</label>
+      <textarea id="reply-body" maxlength="10000" rows="5" required placeholder="补充说明、追问或反馈…"></textarea>
+      <p id="reply-error" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><span>⌘ / Ctrl + Enter 回复</span><button id="save-reply" type="submit" class="primary">发送回复</button></div>
     </form>
   </dialog>
   <dialog id="ai-dialog"><div class="dialog-heading"><h2>复制给 Claude Code</h2><button id="close-ai" aria-label="关闭" type="button">×</button></div><p>剪贴板不可用，请手动复制下面的内容。</p><textarea id="ai-text" rows="10" readonly aria-label="AI 指令"></textarea></dialog>

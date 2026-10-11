@@ -94,6 +94,36 @@ test('HTTP rejects cross-site requests, forged anchors and traversal', async t =
   assert.equal((await request('/api/comments', 'POST', null)).status, 400);
 });
 
+test('HTTP user and AI thread operations are protected and preserve original comments', async t => {
+  const { sha, info, base, request } = await fixture(t);
+  const diff = await (await request(`/api/diff?sha=${sha}`)).json();
+  const comment = await (await request('/api/comments', 'POST', { sha, anchor: { fileId: diff.files[0].id, side: 'new', startLine: 1, endLine: 1 }, body: '请检查' })).json();
+  const route = `/api/comments/${comment.id}`;
+  assert.equal((await fetch(base + route + '/ai', { method: 'POST' })).status, 403);
+  assert.equal((await request(route + '/ai', 'POST', { action: 'resolve' }, { Origin: 'https://evil.invalid' })).status, 403);
+  assert.equal((await request(route + '/replies', 'POST', { body: 'forged', author: 'ai' })).status, 400);
+  assert.equal((await request(route + '/ai', 'POST', { action: 'resolve', body: 'note', sha: 'forged' })).status, 400);
+  assert.equal((await request(route + '/replies', 'POST', { body: ' ' })).status, 400);
+  const user = await request(route + '/replies', 'POST', { body: '用户追问' });
+  assert.equal(user.status, 201);
+  assert.equal((await user.json()).replies[0].author, 'user');
+  const ai = await request(route + '/ai', 'POST', { action: 'reply', body: '分析结果' });
+  assert.equal(ai.status, 200);
+  assert.equal((await ai.json()).replies[1].author, 'ai');
+  const resolved = await (await request(route + '/ai', 'POST', { action: 'resolve', body: '已验证' })).json();
+  assert.equal(resolved.resolvedBy, 'ai');
+  assert.equal(resolved.resolved, true);
+  assert.equal(resolved.body, comment.body);
+  assert.equal(resolved.code, comment.code);
+  assert.equal(resolved.replies.length, 3);
+  assert.match(await readFile(info.markdownPath, 'utf8'), /已验证/);
+  const reopened = await (await request(route + '/ai', 'POST', { action: 'reopen' })).json();
+  assert.equal(reopened.resolved, false);
+  const userResolved = await (await request(route, 'PATCH', { resolved: true })).json();
+  assert.equal(userResolved.resolvedBy, 'user');
+  assert.equal((await request(`/api/comments/${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}/replies`, 'POST', { body: 'missing' })).status, 400);
+});
+
 test('one writer per repository/data directory', async t => {
   const { root, dataDir } = await fixture(t);
   await assert.rejects(createApp({ repoPath: root, dataDir }), /已被占用/);

@@ -159,12 +159,16 @@ AI 需要在能访问这些本地文件的环境运行。评论是供 AI 阅读�
 
 服务保持运行时，此 Skill 只使用 `list` 读取讨论和 `reply` 追加回复；关闭或重新打开评论请由人在网页中操作。回复写入经服务的串行队列完成，**不要直接编辑 comments.json 或 comments.md**。顶部「复制 AI 指令」会提供当前项目、服务地址和脚本的实际路径。
 
+Skill 的每条回复包含三个简短模块：**问题是否存在**（是/否/尚无法确认及必要依据）、**处理状态**（是否需解决，以及代码问题已解决/未解决/待验证；不需处理时说明不适用）、**解决方式**（实际改动和验证，或建议方案/未处理原因）。不虚构已完成的工作，不为模板重复展开；保留必要风险或阻塞。“代码问题已解决”不代表评论已关闭，状态仍由人操作。
+
 ```sh
 # 查看全部评论及回复
 node /Users/ws/Documents/commit-review/ai-review.mjs list --repo /path/to/repo
 
 # 回复，不覆盖用户原文
-node /Users/ws/Documents/commit-review/ai-review.mjs reply --repo /path/to/repo --comment 评论UUID --body '已检查，正在补充边界测试。'
+node /Users/ws/Documents/commit-review/ai-review.mjs reply --repo /path/to/repo --comment 评论UUID --body '问题是否存在：尚无法确认，缺少复现输入。
+处理状态：是否需解决待判断，代码问题待验证。
+解决方式：尚未修改；建议补充复现输入后验证。'
 ```
 
 - 默认连接 `http://127.0.0.1:4318`，其他端口使用 `--url http://127.0.0.1:4319`。只接受本地 HTTP 地址，不跟随重定向。

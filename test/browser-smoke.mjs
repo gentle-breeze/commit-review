@@ -1,3 +1,4 @@
+import { checkCommentNavigation } from './comment-navigation-browser.mjs';
 // Optional integration check: node test/browser-smoke.mjs (requires Google Chrome on macOS).
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, readFile, rm, mkdir, symlink } from 'node:fs/promises';
@@ -203,7 +204,7 @@ try {
   await evaluate('document.querySelector("#cancel-reply").click()');
   await app.store.reply(scrollComment.id, '长回复上下滚动\n'.repeat(100));
   await evaluate('document.querySelector("#refresh").click()');
-  await wait('document.querySelectorAll("#comments .reply-item").length === 2');
+  await wait('document.querySelectorAll("#comments .reply-item").length === 2 && !document.querySelector("#refresh").disabled');
   await evaluate('document.querySelector("#comments .reply-comment").click()');
   await wheelHistory(600);
   assert.ok(await historyScroll()>500,'long thread scrolls through a single history container');
@@ -223,7 +224,13 @@ try {
   await cdp('Emulation.setTouchEmulationEnabled',{enabled:false});
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:600,deviceScaleFactor:1,mobile:false});
   await evaluate('document.querySelector("#cancel-reply").click();document.querySelector("#comments-pane").scrollTop=0;const content=document.querySelector("#comments .reply-content");content.scrollTop=content.scrollHeight');
+  await delay(350);
+  await evaluate('const c=document.querySelector("#comments .reply-content");c.scrollTop=c.scrollHeight');
+  await delay(100);
   const chainPoint = await evaluate('(() => {const r=document.querySelector("#comments .reply-content").getBoundingClientRect();return {x:r.x+r.width/2,y:Math.min(innerHeight-50,r.y+100)}})()');
+  await cdp('Input.dispatchMouseEvent',{type:'mouseWheel',...chainPoint,deltaX:0,deltaY:250});
+  await delay(500);
+
   await cdp('Input.dispatchMouseEvent',{type:'mouseWheel',...chainPoint,deltaX:0,deltaY:250});
   await wait('document.querySelector("#comments-pane").scrollTop>0');
   assert.equal(await evaluate('document.body.classList.contains("resizing-comments")'),false,'scrolling does not leave pointer drag state');
@@ -231,6 +238,7 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride',{width:1600,height:1000,deviceScaleFactor:1,mobile:false});
   await cdp('Page.reload');
   await wait('document.querySelector(".change-count")?.textContent === "1 处变更"');
+  await checkCommentNavigation({cdp,evaluate,wait,delay,request:scrollRequest,app,head:originalHead,previous:git('rev-parse','initial').toString().trim()});
   const codeFonts = () => evaluate('[...document.querySelectorAll(".monaco-diff-editor .view-lines")].map(node => getComputedStyle(node).fontSize)');
   const zoomKey = async (key, modifiers) => {
     const code = key === '-' ? 'Minus' : key === '0' ? 'Digit0' : 'Equal';

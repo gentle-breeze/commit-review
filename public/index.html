@@ -47,6 +47,7 @@
         <label class="commit-select-all"><input id="select-commits" type="checkbox">全选当前已加载列表</label>
         <button id="hide-commits" type="button" disabled>隐藏所选（0）</button>
       </div>
+      <div id="comment-commit" class="comment-linked" hidden></div>
       <div id="commits" class="commit-list"></div>
       <button id="more" class="load-more" type="button" hidden>加载更多提交</button>
     </aside>
@@ -59,11 +60,13 @@
     </section>
     <div id="comments-resizer" hidden role="separator" tabindex="0" aria-label="调整评论面板宽度" aria-orientation="vertical" aria-controls="comments-pane" aria-valuemin="260" aria-valuemax="640" aria-valuenow="290" title="拖动调整评论宽度；左右方向键微调，Home/End 最小/最大，双击恢复默认"></div>
     <aside id="comments-pane" class="comments pane" aria-label="审查评论" hidden>
-      <div class="pane-heading"><h2>审查评论 <span id="comment-count" class="count">0</span></h2></div>
+      <div class="pane-heading"><h2>审查评论 <span id="comment-count" class="count">0</span><span id="unread-count" class="count">0 未读</span></h2></div>
       <div class="comment-controls">
         <select id="comment-scope" aria-label="评论范围"><option value="commit">当前提交</option><option value="all">全部提交</option></select>
         <select id="comment-filter" aria-label="评论状态"><option value="open">未解决</option><option value="all">全部状态</option><option value="resolved">已解决</option></select>
       </div>
+      <div class="comment-navigation"><button id="next-comment" type="button" aria-keyshortcuts="Alt+j" title="下一条评论（Alt/Option + J）；按当前筛选列表顺序，末尾停止">下一条评论 · Alt/⌥ J</button><span id="comment-nav-position">0 / 0</span></div>
+      <p id="comment-visibility" class="comment-visibility"></p>
       <div id="comments" class="comment-list"></div>
       <details class="ai-details"><summary>AI 如何读取评论？</summary><p>评论实时保存到本地，代码和评论不会上传。点击顶部按钮，将指令粘贴给 Claude Code。AI 可通过本地工具回复、解决或重新打开评论；不要直接修改导出文件。页面每 5 秒同步评论，输入回复时暂停同步。</p><p>Markdown 文件：</p><code id="markdown-path"></code><p>JSON 文件：</p><code id="json-path"></code><p>修改前请让 AI 核对当前 HEAD 与历史 commit，避免覆盖已有改动。</p></details>
     </aside>

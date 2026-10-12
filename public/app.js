@@ -1,3 +1,4 @@
+import { commentRevision, reviewComments, nextReviewComment } from './comment-view.js';
 import { readHiddenCommits, writeHiddenCommits, visibleCommits } from './commit-filter.js';
 import { createComparison } from './editor.js';
 import { renderCommentText } from './comment-format.js';
@@ -43,6 +44,36 @@ function statusLabel(comment) {
   const status = comment.resolved ? '已解决' : '未解决';
   return comment.resolvedBy ? `${status} · ${comment.resolvedBy === 'ai' ? 'AI' : '用户'}${comment.resolved ? '解决' : '重新打开'} · ${date(comment.resolvedAt)}` : status;
 }
+const readComments = new Map();
+let activeCommentId = null, navigatingComment = false;
+const commentVisible = comment => hiddenCommits.has(comment.sha) === showingHidden;
+const visibleReviewComments = () => reviewComments(state.comments, {
+  hidden: hiddenCommits, showingHidden, scope: $('#comment-scope').value,
+  sha: state.diff?.sha, filter: $('#comment-filter').value,
+});
+const commentRead = comment => readComments.get(comment.id) === commentRevision(comment);
+function updateReadIndicators() {
+  const comments = visibleReviewComments();
+  $('#unread-count').textContent = `${comments.filter(comment => !comment.resolved && !commentRead(comment)).length} 未读`;
+  for (const card of document.querySelectorAll('#comments .comment-card')) {
+    const comment = state.comments.find(item => item.id === card.dataset.commentId);
+    card.classList.toggle('comment-current', comment?.id === activeCommentId);
+    const badge = card.querySelector('.comment-read-state');
+    if (badge && comment) {
+      badge.textContent = commentRead(comment) ? '已读' : '未读';
+      badge.classList.toggle('unread', !commentRead(comment));
+    }
+  }
+  const index = comments.findIndex(comment => comment.id === activeCommentId);
+  $('#comment-nav-position').textContent = `${index + 1} / ${comments.length}`;
+  $('#next-comment').disabled = !comments.length || navigatingComment;
+}
+function markCommentRead(comment) {
+  if (!commentVisible(comment)) return;
+  readComments.set(comment.id, commentRevision(comment));
+  activeCommentId = comment.id;
+  updateReadIndicators();
+}
 const replyExpansion = new Map();
 try {
   const saved = JSON.parse(sessionStorage.getItem('commit-review.reply-expansion') || '[]');
@@ -65,6 +96,7 @@ function renderReplies(comment, context = 'sidebar') {
   const summary = el('summary');
   const label = () => { summary.textContent = `${comment.replies.length} 条回复 · ${thread.open ? '收起' : '展开'}`; };
   label();
+  summary.addEventListener('click', () => { if (!thread.open) markCommentRead(comment); });
   thread.addEventListener('toggle', () => {
     replyExpansion.set(key, thread.open); label();
     try { sessionStorage.setItem('commit-review.reply-expansion', JSON.stringify([...replyExpansion])); } catch { /* Keep the in-memory preference. */ }
@@ -162,6 +194,11 @@ function saveHiddenCommits() {
   try { writeHiddenCommits(localStorage, preferenceRepository, hiddenCommits); }
   catch { notice('浏览器无法保存隐藏偏好；本次页面内仍有效，重新打开后可能丢失。'); }
 }
+function refreshCommentVisibility() {
+  if (state.selection?.commentId && !state.comments.some(comment => comment.id === state.selection.commentId && commentVisible(comment))) state.selection = null;
+  if (!state.comments.some(comment => comment.id === activeCommentId && commentVisible(comment))) activeCommentId = null;
+  renderComments(); paintSelection();
+}
 $('#select-commits').addEventListener('change', event => {
   selectedCommits = new Set(event.target.checked ? listedCommits().map(commit => commit.sha) : []);
   for (const input of document.querySelectorAll('.commit-select')) input.checked = selectedCommits.has(input.value);
@@ -169,14 +206,14 @@ $('#select-commits').addEventListener('change', event => {
 });
 $('#hide-commits').addEventListener('click', () => run(async () => {
   for (const sha of selectedCommits) showingHidden ? hiddenCommits.delete(sha) : hiddenCommits.add(sha);
-  selectedCommits.clear(); saveHiddenCommits(); renderCommits(); await reconcileCommit();
+  selectedCommits.clear(); saveHiddenCommits(); renderCommits(); refreshCommentVisibility(); await reconcileCommit();
 }));
 $('#show-hidden').addEventListener('click', () => run(async () => {
-  showingHidden = !showingHidden; selectedCommits.clear(); renderCommits(); await reconcileCommit();
+  showingHidden = !showingHidden; selectedCommits.clear(); renderCommits(); refreshCommentVisibility(); await reconcileCommit();
 }));
 $('#restore-commits').addEventListener('click', () => run(async () => {
   hiddenCommits.clear(); selectedCommits.clear(); showingHidden = false;
-  saveHiddenCommits(); renderCommits(); await reconcileCommit();
+  saveHiddenCommits(); renderCommits(); refreshCommentVisibility(); await reconcileCommit();
 }));
 $('#commit-search').addEventListener('input', () => run(async () => {
   selectedCommits.clear(); renderCommits(); await reconcileCommit();
@@ -187,6 +224,8 @@ function renderCommits() {
   target.replaceChildren();
   for (const commit of listedCommits()) {
     const node = button('', () => run(() => loadDiff(commit.sha)), `commit${state.diff?.sha === commit.sha ? ' active' : ''}`);
+    node.dataset.commitSha = commit.sha;
+    if (state.diff?.sha === commit.sha) node.setAttribute('aria-current', 'true');
     node.append(el('span', 'commit-subject', commit.subject));
     const meta = el('span', 'commit-meta');
     meta.append(el('code', '', commit.sha.slice(0, 8)), el('span', '', commit.author), el('span', '', date(commit.date)));
@@ -209,6 +248,15 @@ function renderCommits() {
   if (!listedCommits().length) empty(target, commitEmptyMessage());
   updateCommitActions();
   $('#more').hidden = !state.hasMore;
+  const linked = $('#comment-commit'); linked.replaceChildren();
+  if (state.diff && state.commentLocatedSha === state.diff.sha && commentVisible(state.diff) && !listedCommits().some(commit => commit.sha === state.diff.sha)) {
+    const sha = state.diff.sha;
+    const node = button('', () => run(() => loadDiff(sha)), 'commit active linked-comment-commit');
+    node.dataset.commitSha = sha; node.setAttribute('aria-current', 'true');
+    node.append(el('span', 'commit-subject', state.diff.subject), el('span', 'commit-meta', `${sha.slice(0, 8)} · 评论关联提交（不在当前已加载 / 搜索列表）`));
+    linked.append(node);
+  }
+  linked.hidden = !linked.childElementCount;
 }
 async function loadCommits(append = false) {
   const generation = ++state.listGeneration;
@@ -405,7 +453,7 @@ async function loadFile(fileId, entry = null) {
   const preview = el('section', 'comment-preview'); preview.hidden = true;
   preview.setAttribute('aria-label', '代码评论');
   let previewAnchor = null, previewSignature = '';
-  const matchingComments = () => previewAnchor ? state.comments.filter(comment => comment.sha === diff.sha && comment.fileId === file.id &&
+  const matchingComments = () => previewAnchor ? state.comments.filter(comment => commentVisible(comment) && comment.sha === diff.sha && comment.fileId === file.id &&
     comment.side === previewAnchor.side && containsPosition(comment, previewAnchor.startLine, previewAnchor.startColumn)) : [];
   const closePreview = () => { preview.hidden = true; previewAnchor = null; previewSignature = ''; };
   const updatePreview = () => {
@@ -531,6 +579,7 @@ async function loadFile(fileId, entry = null) {
       if (draft) draft.dismissed = true;
       actions.hidden = true;
       preview.hidden = false;
+      for (const comment of matchingComments()) markCommentRead(comment);
       positionComposer();
     },
     onSelectionComplete: selectedText => {
@@ -582,7 +631,7 @@ function selectLines(file, side, startLine, endLine, extend, columns) {
 }
 function paintSelection() {
   const selection = state.selection;
-  state.editor?.paint(selection, state.comments.filter(comment => comment.sha === state.diff?.sha && comment.fileId === state.file?.id));
+  state.editor?.paint(selection, state.comments.filter(comment => commentVisible(comment) && comment.sha === state.diff?.sha && comment.fileId === state.file?.id));
   document.querySelectorAll('[data-actions]').forEach(node => {
     const draft = drafts.get(draftKey());
     node.hidden = !draft || !!draft.dismissed || node.dataset.actions !== draft.anchor.fileId;
@@ -596,6 +645,8 @@ function paintSelection() {
   state.positionComposer?.();
 }
 function openComment(comment) {
+  if (!commentVisible(comment)) return;
+  markCommentRead(comment);
   state.editing = comment;
   $('#form-error').textContent = '';
   $('#dialog-title').textContent = '编辑评论';
@@ -617,6 +668,8 @@ async function reloadComments({ background = false } = {}) {
 }
 let replyCommentId = null, commentWrites = 0, pollingComments = false;
 function openReply(comment) {
+  if (!commentVisible(comment)) return;
+  markCommentRead(comment);
   replyCommentId = comment.id;
   $('#reply-context').replaceChildren(`${comment.path} · ${comment.side} ${anchorLabel(comment)}\n`, renderCommentText(el('span'), comment.body));
   $('#reply-history').replaceChildren(renderReplies(comment, 'dialog'));
@@ -633,7 +686,8 @@ $('#reply-form').addEventListener('submit', async event => {
   commentWrites++;
   $('#reply-error').textContent = '';
   try {
-    await api(`/api/comments/${replyCommentId}/replies`, 'POST', { body: $('#reply-body').value });
+    const replied = await api(`/api/comments/${replyCommentId}/replies`, 'POST', { body: $('#reply-body').value });
+    readComments.set(replied.id, commentRevision(replied));
     $('#reply-dialog').close();
     await reloadComments();
     notice('回复已保存。');
@@ -652,33 +706,79 @@ setInterval(async () => {
   try { await reloadComments({ background: true }); } catch { /* The refresh button reports errors; keep drafts intact during a temporary outage. */ }
   finally { pollingComments = false; }
 }, 5000);
+async function openReviewComment(comment) {
+  if (!commentVisible(comment)) return;
+
+  if (state.diff?.sha !== comment.sha) await loadDiff(comment.sha);
+  if (state.diff?.sha !== comment.sha) return;
+  const file = state.diff.files.find(file => file.id === comment.fileId);
+  if (!file) { notice('此评论对应文件不在当前显示范围内。', true); return; }
+  if (state.file?.id !== file.id || !state.editor) await loadFile(file.id);
+  if (!commentVisible(comment) || state.diff?.sha !== comment.sha || state.file?.id !== file.id || !state.editor) return;
+  if (!state.versions || state.versions.unavailable) { notice('此文件无法定位代码，可使用回复查看完整讨论。'); return; }
+  const lineCount = comment.startColumn === undefined ? state.versions[comment.side].lineCount : state.versions[comment.side].text.split(/\r\n|\r|\n/).length;
+  if (comment.endLine > lineCount) { notice('无法定位历史行；原始片段仍保存在评论文件中。', true); return; }
+  state.selection = { fileId: file.id, side: comment.side, base: comment.startLine, startLine: comment.startLine, endLine: comment.endLine, commentId: comment.id,
+    ...(comment.startColumn === undefined ? {} : {startColumn:comment.startColumn,endColumn:comment.endColumn}) };
+  state.collapse = false;
+  $('#collapse-lines').checked = false;
+  state.editor.reveal(state.selection);
+  paintSelection();
+  document.getElementById(`file-${file.id}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  markCommentRead(comment);
+  state.commentLocatedSha = comment.sha;
+  renderCommits();
+  [...document.querySelectorAll('.history [data-commit-sha]')].find(node => node.dataset.commitSha === comment.sha)?.scrollIntoView({block:'nearest',inline:'nearest'});
+  return true;
+}
+async function nextComment() {
+  if (navigatingComment || document.querySelector('dialog[open]')) return;
+  if (drafts.get(draftKey())?.body.trim() || [...drafts.values()].some(draft => draft.saving)) {
+    notice('请先保存或取消当前评论草稿，再导航到下一条评论。'); return;
+  }
+  const comments = visibleReviewComments();
+  const next = nextReviewComment(comments, activeCommentId);
+  if (!next) { notice(comments.length ? '已到当前列表的最后一条评论。' : '当前列表没有可导航的评论。'); return; }
+  navigatingComment = true; updateReadIndicators();
+  try {
+    if (!commentsOpen) { commentsOpen = true; updatePanels(); }
+    if (!await openReviewComment(next)) {
+      if (commentVisible(next) && state.diff?.sha === next.sha) openReply(next);
+      return;
+    }
+    const card = [...document.querySelectorAll('#comments .comment-card')].find(node => node.dataset.commentId === next.id);
+    card?.scrollIntoView({block:'nearest'});
+    card?.querySelector('.comment-anchor')?.focus({preventScroll:true});
+    notice('');
+  } finally { navigatingComment = false; updateReadIndicators(); }
+}
+$('#next-comment').addEventListener('click', () => run(nextComment));
+document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.code !== 'KeyJ') return;
+  const target = event.target;
+  if (!(target instanceof Element) || document.querySelector('dialog[open]')) return;
+  const codeInput = $('#diff').contains(target) && target.matches('.inputarea, .native-edit-context, .ime-text-area');
+  if (!codeInput && (target.isContentEditable || target.closest('input, select, textarea'))) return;
+  if (drafts.get(draftKey())?.body.trim()) return;
+  event.preventDefault(); event.stopPropagation(); run(nextComment);
+}, true);
 function renderComments() {
-  const scope = $('#comment-scope').value;
-  const filter = $('#comment-filter').value;
-  const comments = state.comments.filter(comment => (scope === 'all' || comment.sha === state.diff?.sha) && (filter === 'all' || comment.resolved === (filter === 'resolved')));
+  const comments = visibleReviewComments();
+  $('#comment-visibility').textContent = showingHidden ? '隐藏项模式：仅查看隐藏提交的评论与回复；恢复后回到关注列表。' : '关注列表：已隐藏提交的评论与回复不显示。';
   $('#comment-count').textContent = String(comments.length);
   const target = $('#comments');
   const focusedReply = replyFocusKey();
+  const focused = document.activeElement;
+  const focusedCardId = focused?.closest('#comments .comment-card')?.dataset.commentId;
+  const focusedControl = ['comment-anchor', 'comment-body-link', 'reply-comment'].find(name => focused?.classList.contains(name));
+  const scrollTop = $('#comments-pane').scrollTop;
+  const replyScroll = new Map([...target.querySelectorAll('.comment-card')].map(card => [card.dataset.commentId, card.querySelector('.reply-content')?.scrollTop || 0]));
   target.replaceChildren();
-  for (const comment of [...comments].reverse()) {
+  for (const comment of comments) {
     const card = el('article', `comment-card${comment.resolved ? ' resolved' : ''}`);
-    const jumpToComment = () => run(async () => {
-      if (state.diff?.sha !== comment.sha) await loadDiff(comment.sha);
-      if (state.diff?.sha !== comment.sha) return;
-      const file = state.diff.files.find(file => file.id === comment.fileId);
-      if (!file) { notice('此评论对应文件不在当前显示范围内。', true); return; }
-      if (state.file?.id !== file.id || !state.editor) await loadFile(file.id);
-      if (state.diff?.sha !== comment.sha || state.file?.id !== file.id || !state.editor) return;
-      const lineCount = comment.startColumn === undefined ? state.versions[comment.side].lineCount : state.versions[comment.side].text.split(/\r\n|\r|\n/).length;
-      if (comment.endLine > lineCount) { notice('无法定位历史行；原始片段仍保存在评论文件中。', true); return; }
-      state.selection = { fileId: file.id, side: comment.side, base: comment.startLine, startLine: comment.startLine, endLine: comment.endLine, commentId: comment.id,
-        ...(comment.startColumn === undefined ? {} : {startColumn:comment.startColumn,endColumn:comment.endColumn}) };
-      state.collapse = false;
-      $('#collapse-lines').checked = false;
-      state.editor.reveal(state.selection);
-      paintSelection();
-      document.getElementById(`file-${file.id}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+    card.dataset.commentId = comment.id;
+    if (!comment.resolved) card.append(el('span', 'comment-read-state'));
+    const jumpToComment = () => run(() => openReviewComment(comment));
     const anchor = button(`${comment.sha.slice(0, 8)} · ${comment.path}\n${comment.side} ${anchorLabel(comment)}`, jumpToComment, 'comment-anchor');
     const body = renderCommentText(button('', jumpToComment, 'comment-body-link'), comment.body);
     body.title = '跳转到评论对应的代码行';
@@ -703,6 +803,13 @@ function renderComments() {
   }
   if (!comments.length) empty(target, '暂无符合条件的评论。\n点击 diff 行号，开始第一条评论。');
   restoreReplyFocus(focusedReply, target);
+  for (const card of target.querySelectorAll('.comment-card')) {
+    const content = card.querySelector('.reply-content');
+    if (content) content.scrollTop = replyScroll.get(card.dataset.commentId) || 0;
+    if (focusedControl && card.dataset.commentId === focusedCardId) card.querySelector(`.${focusedControl}`)?.focus({preventScroll:true});
+  }
+  $('#comments-pane').scrollTop = scrollTop;
+  updateReadIndicators();
 }
 let focusDiff = false;
 let commentsOpen = false;
@@ -866,6 +973,7 @@ async function init() {
     return;
   }
   if (preferenceRepository !== state.info.repository) {
+    readComments.clear(); activeCommentId = null;
     preferenceRepository = state.info.repository; hiddenCommits = new Set(); selectedCommits.clear(); showingHidden = false;
     try { hiddenCommits = readHiddenCommits(localStorage, preferenceRepository); }
     catch { notice('浏览器隐藏偏好不可用；仍可在本次页面中隐藏提交。'); }

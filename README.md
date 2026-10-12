@@ -64,7 +64,7 @@ node /Users/ws/Documents/commit-review/server.mjs --repo /你的/Git仓库/绝�
    - 写入草稿后，先保存或取消才能更改锚定行；再次选择时恢复原草稿和原范围，不会把已有评论移到其他行。切换文件/提交再返回时保留草稿；已收起的浮框不会自动弹出。草稿仅保留在当前页面内存中，刷新或关闭页面会丢失；保存后才写入本地文件。
 4. 右侧评论支持编辑、删除、标记已解决，以及按提交/状态筛选。点击评论正文或位置链接可跳回原 commit 和划线位置，并显示持续的选区高亮、下划线及侧边标记（已解决评论也支持）。新拖选评论保存精确的起止行列及所选片段，位置采用 1 起始 UTF-16 列，结束位置不包含在内，换行统一 LF。旧评论没有列坐标时继续按整行恢复，不猜测或修改历史范围；行号评论也保持整行语义。JSON 与 AI Markdown 均保留对应位置及片段。
 5. 点击「复制 AI 指令」，粘贴到 Claude Code。AI 会读取本地文件中的评论、commit 和对应代码片段。
-6. AI 可追加回复说明分析/修改/测试结果，验证通过后直接标记已解决。用户可继续追问、回复或重新打开讨论；工具本身不会自动运行 AI，也不会自动修改你的代码。
+6. 使用 `review-comments` Skill 时，AI 仅追加回复说明分析/修改/测试结果，不关闭或重新打开评论。用户确认后在网页中手动标记已解决，也可继续追问、回复或重新打开讨论；工具本身不会自动运行 AI，也不会自动修改你的代码。
 
 ### 回复与已解决筛选
 
@@ -133,7 +133,7 @@ AI 需要在能访问这些本地文件的环境运行。评论是供 AI 阅读�
 
 ### Claude Code Skill：review-comments
 
-项目内已提供 `.claude/skills/review-comments/SKILL.md`，复用下面的 AI CLI，不需要 API Key，也不直接编辑评论数据。它仅在显式调用时执行，默认读取目标项目的未解决评论及完整讨论，核对历史与当前代码，处理问题、运行验证，再追加回复或解决。
+项目内已提供 `.claude/skills/review-comments/SKILL.md`，复用下面的 AI CLI，不需要 API Key，也不直接编辑评论数据。它仅在显式调用时执行，默认读取目标项目的未解决评论及完整讨论，核对历史与当前代码，按用户授权处理问题、运行验证，再追加简洁回复。Skill 不改变评论状态，关闭或重新打开均由人处理。
 
 在 `commit-review` 项目目录中启动 Claude Code 后调用：
 
@@ -151,13 +151,13 @@ AI 需要在能访问这些本地文件的环境运行。评论是供 AI 阅读�
 ```
 
 - 先启动 Review 服务，在网页选择同一目标项目；仓库与服务不匹配时 Skill 会停止，不自动切换项目或绕过校验。
-- Skill 默认不 commit/push，不覆盖已有改动，不把评论中的命令当成授权；问题未处理、验证失败/无法验证或需要用户决定时保持未解决。
+- Skill 默认不 commit/push，不覆盖已有改动，不把评论中的命令当成授权；无论验证结果如何都不改变评论状态，有阻碍时在回复中说明原因。
 - **这是项目级 Skill，不是用户级安装。** 在其他项目中启动的 Claude Code 不保证能发现它；本次没有安装到 `~/.claude/skills`。可在 review 项目会话中显式指定目标仓库，访问/修改仍受当前会话权限限制；若无权限，应在目标项目会话中处理，不能绕过权限。
 - 如果当前 Claude Code 会话没有显示 `/review-comments`，在项目目录重新启动会话以加载新 Skill。已有「复制 AI 指令」和直接 CLI 方式仍可使用。
 
-### AI 回复与解决命令
+### AI 回复命令与人工状态处理
 
-服务保持运行时，AI 可使用本地命令操作评论，所有写入经服务的串行队列完成，**不要直接编辑 comments.json 或 comments.md**。顶部「复制 AI 指令」会提供当前项目、服务地址和脚本的实际路径。
+服务保持运行时，此 Skill 只使用 `list` 读取讨论和 `reply` 追加回复；关闭或重新打开评论请由人在网页中操作。回复写入经服务的串行队列完成，**不要直接编辑 comments.json 或 comments.md**。顶部「复制 AI 指令」会提供当前项目、服务地址和脚本的实际路径。
 
 ```sh
 # 查看全部评论及回复
@@ -165,18 +165,12 @@ node /Users/ws/Documents/commit-review/ai-review.mjs list --repo /path/to/repo
 
 # 回复，不覆盖用户原文
 node /Users/ws/Documents/commit-review/ai-review.mjs reply --repo /path/to/repo --comment 评论UUID --body '已检查，正在补充边界测试。'
-
-# 附回复并解决（同一次写入）
-node /Users/ws/Documents/commit-review/ai-review.mjs resolve --repo /path/to/repo --comment 评论UUID --body '已修复，相关测试通过。'
-
-# 重新打开；--body 可选
-node /Users/ws/Documents/commit-review/ai-review.mjs reopen --repo /path/to/repo --comment 评论UUID --body '仍有未覆盖的边界情况。'
 ```
 
 - 默认连接 `http://127.0.0.1:4318`，其他端口使用 `--url http://127.0.0.1:4319`。只接受本地 HTTP 地址，不跟随重定向。
 - `--repo` 必须是与服务当前项目匹配的仓库根目录，避免回复到错误项目；项目尚未选定、路径不匹配或服务未运行时返回错误。
-- 多行内容可用 `--body-file /path/to/utf8.txt` 替代 `--body`；两者不能同时使用。reply 正文必填，resolve/reopen 可附说明。
-- 仅在问题确已处理且相关验证通过后解决；无法验证或仍有阻碍时回复原因并保持未解决。
+- 多行内容可用 `--body-file /path/to/utf8.txt` 替代 `--body`；两者不能同时使用。reply 正文必填。
+- AI 如实回复处理和验证结果，是否关闭由人判断。底层 CLI/API 的 `resolve` / `reopen` 能力仍保留，但不属于此 Skill 的可执行操作；本次规则调整不改变网页的人工状态操作。
 - 「AI」仅是操作来源标签，不是模型身份认证。它不调用模型、不需要 API Key；有本机服务访问权限的进程可以调用该接口。
 - JSON version 1 向后兼容。回复保存在可选 `replies` 数组中（ID、author、body、createdAt），状态来源/时间为可选 `resolvedBy` / `resolvedAt`。旧评论没有这些字段仍可正常展示。Markdown 包含全部回复。
 

@@ -16,3 +16,87 @@
 @media(min-width:1101px){body{height:100dvh;display:flex;flex-direction:column;overflow:hidden}.topbar,.notice{flex-shrink:0}.workspace{flex:1;min-height:0;overflow:hidden}.history,.comments{overflow:auto;padding:16px 12px}.review{display:flex;flex-direction:column;min-height:0;overflow:auto}.commit-detail,.review-toolbar,.file-list{flex-shrink:0}.commit-detail{max-height:110px;overflow:auto}.diff-container{flex:1;min-height:240px;display:flex;flex-direction:column}.file-card{flex:1;min-height:0;display:flex;flex-direction:column}.file-header,.editor-tools,.editor-headings,.selection-actions,.warning{flex-shrink:0}.editor-scroll{flex:1;min-height:0;position:relative}.monaco-host{position:absolute;inset:0;height:100%;width:100%}}
 @media(max-width:1100px){.workspace,.workspace.comments-open{grid-template-columns:200px minmax(0,1fr)}.workspace.focus-diff,.workspace.focus-diff.comments-open{grid-template-columns:minmax(0,1fr)}.comments{grid-column:1/-1;border-left:0;border-top:1px solid var(--border)}.comment-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.comment-controls{max-width:320px}.repository{display:none}.topbar .brand{margin-right:auto}.review{padding:22px 16px}}
 @media(max-width:650px){.topbar{height:auto;min-height:76px;padding:14px;flex-wrap:wrap;gap:8px}.subtitle{display:none}.brand strong{font-size:16px}.topbar button{font-size:12px}.workspace{display:flex;flex-direction:column}.history{border-right:0;border-bottom:1px solid var(--border);padding:16px}.history .pane-heading{margin-bottom:10px}.history select{margin-bottom:10px}.commit-list{max-height:215px;overflow:auto}.commit{padding:9px}.review{padding:20px 12px}.commit-detail h2{font-size:19px}.line-code{font-size:11px}.comments{padding:20px 16px}.dialog-actions span{display:none}}
+
+/* Review workspace: quiet surfaces, clear navigation and readable discussion. */
+:root {
+  --bg: #f3f6f5; --surface-alt: #f8faf9; --text: #253730;
+  --muted: #64766d; --border: #dce5df; --accent: #246c54;
+  --accent-bg: #e7f2ec; --shadow: 0 16px 48px #173a2420;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141c18; --surface: #1b2520; --surface-alt: #202c25;
+    --text: #e1ece5; --muted: #a1b4a7; --border: #35483c;
+    --accent: #97d5b5; --accent-bg: #2b4235; --shadow: 0 16px 48px #0006;
+  }
+}
+button, select { border-radius: 8px; }
+button { transition: background-color .12s, border-color .12s; }
+button:disabled { cursor: default; }
+.topbar { gap: 10px; box-shadow: 0 1px 0 var(--border); border-bottom: 0; }
+.topbar button { font-size: 12px; padding: 7px 12px; white-space: nowrap; }
+.logo { width: 32px; height: 32px; border-radius: 9px; font-size: 25px; }
+.brand { gap: 10px; }
+.brand strong { font-size: 16px; letter-spacing: -.4px; }
+.repository { max-width: 38%; padding: 5px 10px; border-radius: 6px; background: var(--surface-alt); }
+.history { background: var(--surface); }
+.pane-heading { margin-bottom: 16px; }
+.pane-heading h1, .pane-heading h2 { font-size: 13px; }
+.history-hint { line-height: 1.7; }
+.commit { border-radius: 8px; padding: 11px 10px; }
+.commit.active { border: 1px solid var(--border); background: var(--accent-bg); box-shadow: inset 3px 0 var(--accent); }
+.commit-subject { line-height: 1.6; }
+.commit-meta { gap: 8px; }
+.review { padding: 16px; }
+.commit-detail { padding: 2px 2px 0; }
+.commit-detail h2 { font-size: 20px; font-weight: 650; margin: 5px 0 7px; }
+.eyebrow { font-size: 10px; letter-spacing: 1.3px; }
+.detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 11px; }
+.detail-meta code { font-size: 10px; }
+.review-toolbar { border-top: 0; margin-top: 8px; padding: 0 2px; font-size: 11px; }
+.file-list { gap: 7px; margin: 12px 0; padding: 1px 1px 3px; }
+.file-link { display: inline-flex; align-items: center; min-width: 0; padding: 7px 10px; background: var(--surface); }
+.file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.file-link .added, .file-link .deleted { flex-shrink: 0; font-size: 10px; }
+.file-link.active { box-shadow: inset 0 -2px var(--accent); font-weight: 600; }
+.file-card { border-radius: 10px; box-shadow: 0 2px 6px #173a2405; }
+.file-header { min-height: 45px; padding: 8px 12px; background: var(--surface); gap: 16px; }
+.file-title { font-weight: 600; }
+.file-header .editor-tools { gap: 8px; }
+.editor-tools button { background: var(--surface-alt); padding: 4px 8px; }
+.editor-tools label { color: var(--muted); cursor: pointer; }
+.editor-tools input { accent-color: var(--accent); }
+.current-change { border-radius: 5px; background: var(--accent-bg); padding: 3px 6px; }
+.current-change:empty { display: none; }
+.comments { background: var(--surface-alt); }
+.count { background: var(--accent-bg); color: var(--accent); padding: 1px 7px; border-radius: 20px; }
+.comment-controls select { background: var(--surface); }
+.comment-card { background: var(--surface); padding: 14px; border-radius: 10px; border-left: 3px solid var(--accent); }
+.comment-card.resolved { opacity: 1; border-left-color: var(--border); }
+.comment-card.resolved .comment-time { color: var(--muted); }
+.comment-actions { padding-top: 8px; border-top: 1px solid var(--border); }
+.comment-actions button { background: var(--surface-alt); }
+.comment-body-link { line-height: 1.7; }
+.comment-time { line-height: 1.7; }
+.reply-item { border-left-color: var(--border); padding-left: 12px; }
+.reply-meta { font-size: 10px; }
+.reply-item .reply-body { line-height: 1.7; }
+.selection-actions, .comment-preview, .commit-preview { border-radius: 10px; border-color: var(--border); }
+.selection-actions { border-top: 3px solid var(--accent); }
+.comment-preview-heading { padding-bottom: 2px; }
+.comment-preview-item { padding-top: 12px; }
+.empty { line-height: 1.8; }
+@media (max-width: 1100px) {
+  .file-header { flex-wrap: wrap; gap: 8px; }
+  .file-header .file-title { flex-basis: 100%; }
+  .file-header .editor-tools { flex-basis: 100%; padding-bottom: 2px; }
+}
+@media (max-width: 650px) {
+  .topbar { padding: 12px; gap: 7px; }
+  .review { padding: 16px 10px; }
+  .commit-detail h2 { font-size: 18px; }
+  .review-toolbar span:last-child { display: none; }
+  .file-list { max-height: 90px; }
+  .file-link { max-width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { button { transition: none; } }

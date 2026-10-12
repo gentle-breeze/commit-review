@@ -38,7 +38,25 @@ self.MonacoEnvironment = {
   getWorker() { return new Worker('/assets/editor.worker.js', { type: 'module' }); },
 };
 const theme = matchMedia('(prefers-color-scheme: dark)');
-const applyTheme = () => monaco.editor.setTheme(theme.matches ? 'vs-dark' : 'vs');
+monaco.editor.defineTheme('review-light', {
+  base: 'vs', inherit: true, rules: [], colors: {
+    'editor.foreground': '#253730', 'editorLineNumber.foreground': '#8A9991',
+    'editorLineNumber.activeForeground': '#246C54', 'editorGutter.background': '#FAFCFB',
+    'diffEditor.insertedLineBackground': '#EAF5EE', 'diffEditor.removedLineBackground': '#FBEFEC',
+    'diffEditor.insertedTextBackground': '#BFE5CC80', 'diffEditor.removedTextBackground': '#F1C8C180',
+    'diffEditor.diagonalFill': '#DFE7E2', 'editorWidget.border': '#DCE5DF',
+  },
+});
+monaco.editor.defineTheme('review-dark', {
+  base: 'vs-dark', inherit: true, rules: [], colors: {
+    'editor.background': '#1B2520', 'editor.foreground': '#E1ECE5',
+    'editorGutter.background': '#1B2520', 'editorLineNumber.foreground': '#83988A',
+    'diffEditor.insertedLineBackground': '#203B29', 'diffEditor.removedLineBackground': '#422923',
+    'diffEditor.insertedTextBackground': '#315E3E80', 'diffEditor.removedTextBackground': '#773E3580',
+    'diffEditor.diagonalFill': '#35483C',
+  },
+});
+const applyTheme = () => monaco.editor.setTheme(theme.matches ? 'review-dark' : 'review-light');
 applyTheme();
 theme.addEventListener('change', applyTheme);
 

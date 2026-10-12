@@ -184,7 +184,9 @@ async function renderDiff() {
   $('#diff').replaceChildren();
   if (diff.truncated) detail.append(el('div', 'warning', '提交摘要有截断；全文按文件单独加载，最多列出 300 个文件。'));
   for (const file of diff.files) {
-    const item = button(file.path, () => run(() => loadFile(file.id)), 'file-link');
+    const item = button('', () => run(() => loadFile(file.id)), 'file-link');
+    item.title = file.path;
+    item.append(el('span', 'file-path', file.path));
     item.dataset.file = file.id;
     item.append(el('span', 'added', `+${file.additions}`), el('span', 'deleted', `−${file.deletions}`));
     $('#files').append(item);

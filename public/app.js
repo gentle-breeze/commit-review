@@ -1,4 +1,5 @@
 import { createComparison } from './editor.js';
+import { renderCommentText } from './comment-format.js';
 
 const $ = selector => document.querySelector(selector);
 const DEFAULT_FONT_SIZE = 13, MIN_FONT_SIZE = 10, MAX_FONT_SIZE = 24;
@@ -41,13 +42,38 @@ function statusLabel(comment) {
   const status = comment.resolved ? '已解决' : '未解决';
   return comment.resolvedBy ? `${status} · ${comment.resolvedBy === 'ai' ? 'AI' : '用户'}${comment.resolved ? '解决' : '重新打开'} · ${date(comment.resolvedAt)}` : status;
 }
-function renderReplies(comment) {
-  const thread = el('div', 'reply-thread');
+const replyExpansion = new Map();
+try {
+  const saved = JSON.parse(sessionStorage.getItem('commit-review.reply-expansion') || '[]');
+  if (Array.isArray(saved)) for (const entry of saved) {
+    if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'boolean') replyExpansion.set(entry[0], entry[1]);
+  }
+} catch { /* Storage may be unavailable; keep toggles usable in memory. */ }
+function replyFocusKey() { return document.activeElement?.closest('.reply-thread > summary')?.parentElement.dataset.replyKey; }
+function restoreReplyFocus(key, root) {
+  if (!key) return;
+  [...root.querySelectorAll('.reply-thread')].find(node => node.dataset.replyKey === key)?.querySelector('summary')?.focus({ preventScroll: true });
+}
+function renderReplies(comment, context = 'sidebar') {
+  if (!comment.replies?.length) return el('div', 'reply-thread');
+  const thread = el('details', 'reply-thread');
+  const key = `${context}:${comment.id}`;
   thread.dataset.commentId = comment.id;
+  thread.dataset.replyKey = key;
+  thread.open = replyExpansion.get(key) ?? true;
+  const summary = el('summary');
+  const label = () => { summary.textContent = `${comment.replies.length} 条回复 · ${thread.open ? '收起' : '展开'}`; };
+  label();
+  thread.addEventListener('toggle', () => {
+    replyExpansion.set(key, thread.open); label();
+    try { sessionStorage.setItem('commit-review.reply-expansion', JSON.stringify([...replyExpansion])); } catch { /* Keep the in-memory preference. */ }
+  });
+  const content = el('div', 'reply-content');
+  thread.append(summary, content);
   for (const reply of comment.replies || []) {
     const item = el('article', 'reply-item');
-    item.append(el('div', 'reply-meta', `${reply.author === 'ai' ? 'AI' : '用户'} · ${date(reply.createdAt)}`), el('p', 'reply-body', reply.body));
-    thread.append(item);
+    item.append(el('div', 'reply-meta', `${reply.author === 'ai' ? 'AI' : '用户'} · ${date(reply.createdAt)}`), renderCommentText(el('p', 'reply-body'), reply.body));
+    content.append(item);
   }
   return thread;
 }
@@ -326,14 +352,16 @@ async function loadFile(fileId, entry = null) {
     const signature = JSON.stringify(comments);
     if (signature === previewSignature) return;
     previewSignature = signature;
+    const focusedReply = replyFocusKey();
     const heading = el('div', 'comment-preview-heading');
     heading.append(el('strong', '', `${comments.length} 条评论`), button('关闭', closePreview));
     preview.replaceChildren(heading);
     for (const comment of comments) {
       const item = el('article', 'comment-preview-item');
-      item.append(el('div', 'comment-preview-meta', `${comment.side === 'old' ? '旧版本' : '新版本'} · ${anchorLabel(comment)} · ${statusLabel(comment)}`), el('p', '', comment.body), renderReplies(comment), button('回复', () => openReply(comment), 'reply-comment'));
+      item.append(el('div', 'comment-preview-meta', `${comment.side === 'old' ? '旧版本' : '新版本'} · ${anchorLabel(comment)} · ${statusLabel(comment)}`), renderCommentText(el('p'), comment.body), renderReplies(comment, 'preview'), button('回复', () => openReply(comment), 'reply-comment'));
       preview.append(item);
     }
+    restoreReplyFocus(focusedReply, preview);
   };
   let positionFrame = 0;
   const positionComposer = () => {
@@ -527,8 +555,8 @@ async function reloadComments({ background = false } = {}) {
 let replyCommentId = null, commentWrites = 0, pollingComments = false;
 function openReply(comment) {
   replyCommentId = comment.id;
-  $('#reply-context').textContent = `${comment.path} · ${comment.side} ${anchorLabel(comment)}\n${comment.body}`;
-  $('#reply-history').replaceChildren(renderReplies(comment));
+  $('#reply-context').replaceChildren(`${comment.path} · ${comment.side} ${anchorLabel(comment)}\n`, renderCommentText(el('span'), comment.body));
+  $('#reply-history').replaceChildren(renderReplies(comment, 'dialog'));
   $('#reply-error').textContent = '';
   $('#reply-body').value = '';
   $('#reply-dialog').showModal();
@@ -567,6 +595,7 @@ function renderComments() {
   const comments = state.comments.filter(comment => (scope === 'all' || comment.sha === state.diff?.sha) && (filter === 'all' || comment.resolved === (filter === 'resolved')));
   $('#comment-count').textContent = String(comments.length);
   const target = $('#comments');
+  const focusedReply = replyFocusKey();
   target.replaceChildren();
   for (const comment of [...comments].reverse()) {
     const card = el('article', `comment-card${comment.resolved ? ' resolved' : ''}`);
@@ -588,7 +617,7 @@ function renderComments() {
       document.getElementById(`file-${file.id}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     const anchor = button(`${comment.sha.slice(0, 8)} · ${comment.path}\n${comment.side} ${anchorLabel(comment)}`, jumpToComment, 'comment-anchor');
-    const body = button(comment.body, jumpToComment, 'comment-body-link');
+    const body = renderCommentText(button('', jumpToComment, 'comment-body-link'), comment.body);
     body.title = '跳转到评论对应的代码行';
     card.addEventListener('click', event => {
       if (!event.target.closest('button, .reply-thread') && !window.getSelection()?.toString()) jumpToComment();
@@ -610,9 +639,65 @@ function renderComments() {
     target.append(card);
   }
   if (!comments.length) empty(target, '暂无符合条件的评论。\n点击 diff 行号，开始第一条评论。');
+  restoreReplyFocus(focusedReply, target);
 }
 let focusDiff = false;
 let commentsOpen = false;
+let preferredCommentsWidth = 290;
+const resizer = $('#comments-resizer');
+const desktopComments = matchMedia('(min-width:1101px)');
+function commentsWidthLimits() {
+  const historyWidth = focusDiff ? 0 : $('.history').getBoundingClientRect().width;
+  return { min: 260, max: Math.max(260, Math.min(640, $('.workspace').clientWidth - historyWidth - 6 - 640)) };
+}
+function applyCommentsWidth() {
+  const { min, max } = commentsWidthLimits();
+  const width = Math.max(min, Math.min(max, preferredCommentsWidth));
+  $('.workspace').style.setProperty('--comments-width', `${width}px`);
+  resizer.hidden = !commentsOpen || !desktopComments.matches;
+  resizer.setAttribute('aria-valuemin', String(min));
+  resizer.setAttribute('aria-valuemax', String(max));
+  resizer.setAttribute('aria-valuenow', String(width));
+  resizer.setAttribute('aria-valuetext', `评论面板宽 ${width} 像素`);
+}
+let panelDrag = null;
+function finishPanelDrag(cancel = false) {
+  if (!panelDrag) return;
+  const drag = panelDrag; panelDrag = null;
+  if (cancel) preferredCommentsWidth = drag.previous;
+  document.body.classList.remove('resizing-comments');
+  if (resizer.hasPointerCapture(drag.id)) resizer.releasePointerCapture(drag.id);
+  applyCommentsWidth();
+}
+resizer.addEventListener('pointerdown', event => {
+  if (event.button !== 0 || !desktopComments.matches) return;
+  event.preventDefault(); resizer.focus();
+  panelDrag = { id: event.pointerId, x: event.clientX, width: Number(resizer.getAttribute('aria-valuenow')), previous: preferredCommentsWidth };
+  resizer.setPointerCapture(event.pointerId);
+  document.body.classList.add('resizing-comments');
+});
+resizer.addEventListener('pointermove', event => {
+  if (!panelDrag || panelDrag.id !== event.pointerId) return;
+  const { min, max } = commentsWidthLimits();
+  preferredCommentsWidth = Math.round(Math.max(min, Math.min(max, panelDrag.width + panelDrag.x - event.clientX)));
+  applyCommentsWidth();
+});
+resizer.addEventListener('pointerup', () => finishPanelDrag());
+resizer.addEventListener('pointercancel', () => finishPanelDrag(true));
+resizer.addEventListener('lostpointercapture', () => finishPanelDrag());
+resizer.addEventListener('dblclick', () => { preferredCommentsWidth = 290; applyCommentsWidth(); });
+resizer.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && panelDrag) { event.preventDefault(); finishPanelDrag(true); return; }
+  if (event.altKey || event.metaKey || event.ctrlKey || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault(); event.stopPropagation();
+  const { min, max } = commentsWidthLimits();
+  const step = event.shiftKey ? 40 : 10;
+  preferredCommentsWidth = event.key === 'Home' ? min : event.key === 'End' ? max
+    : Math.max(min, Math.min(max, Number(resizer.getAttribute('aria-valuenow')) + (event.key === 'ArrowLeft' ? step : -step)));
+  applyCommentsWidth();
+});
+window.addEventListener('resize', () => { finishPanelDrag(true); applyCommentsWidth(); });
+
 function updatePanels() {
   hideCommitPreview();
   $('.workspace').classList.toggle('focus-diff', focusDiff);
@@ -630,6 +715,8 @@ function updatePanels() {
   }
   $('#focus-diff').textContent = focusDiff ? '退出专注' : '专注 diff';
   $('#focus-diff').setAttribute('aria-pressed', String(focusDiff));
+  finishPanelDrag();
+  applyCommentsWidth();
 }
 $('#toggle-comments').addEventListener('click', () => {
   commentsOpen = !commentsOpen;

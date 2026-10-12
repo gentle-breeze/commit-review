@@ -1,7 +1,8 @@
 import { createComparison } from './editor.js';
 
 const $ = selector => document.querySelector(selector);
-const state = { info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true };
+const DEFAULT_FONT_SIZE = 13, MIN_FONT_SIZE = 10, MAX_FONT_SIZE = 24;
+const state = { info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true, fontSize: DEFAULT_FONT_SIZE };
 
 const drafts = new Map();
 const draftKey = () => `${state.diff?.sha}:${state.file?.id}`;
@@ -194,6 +195,29 @@ async function renderDiff() {
   if (diff.files.length) await loadFile(diff.files[0].id);
   else empty($('#diff'), '此提交没有文件差异');
 }
+function setFontSize(size) {
+  state.fontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
+  state.editor?.fontSize(state.fontSize);
+  const controls = $('#diff .font-controls');
+  if (!controls) return;
+  controls.querySelector('.font-reset').textContent = `${state.fontSize}px`;
+  controls.querySelector('.font-reset').setAttribute('aria-label', `当前代码字号 ${state.fontSize} 像素，点击恢复 ${DEFAULT_FONT_SIZE} 像素`);
+  controls.querySelector('.font-decrease').setAttribute('aria-disabled', String(state.fontSize === MIN_FONT_SIZE));
+  controls.querySelector('.font-increase').setAttribute('aria-disabled', String(state.fontSize === MAX_FONT_SIZE));
+}
+document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.metaKey === event.ctrlKey) return;
+  const target = event.target;
+  if (!(target instanceof Element) || !$('#diff').contains(target) || !target.closest('.monaco-editor, .editor-tools') || document.querySelector('dialog[open]')) return;
+  const codeInput = target.matches('.inputarea, .native-edit-context, .ime-text-area');
+  if (!codeInput && (target.isContentEditable || target.closest('input, select, textarea'))) return;
+  const increase = event.key === '+' || event.key === '=';
+  if (!increase && (event.shiftKey || !['-', '0'].includes(event.key))) return;
+  if (!state.editor) return;
+  // Claim browser zoom keys only while the diff editor or its controls have focus.
+  event.preventDefault(); event.stopPropagation();
+  setFontSize(event.key === '0' ? DEFAULT_FONT_SIZE : state.fontSize + (increase ? 1 : -1));
+}, true);
 document.addEventListener('keydown', event => {
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   const direction = event.code === 'BracketLeft' || event.key === '[' ? 'previous'
@@ -270,8 +294,19 @@ async function loadFile(fileId, entry = null) {
     state.editor?.options(state);
   };
   wrap.addEventListener('change', updateOptions); collapse.addEventListener('change', updateOptions);
-  tools.append(previous, next, current, count, wrapLabel, collapseLabel);
+  const fonts = el('div', 'font-controls');
+  fonts.setAttribute('role', 'group'); fonts.setAttribute('aria-label', '代码字号');
+  fonts.title = '代码区或工具栏聚焦时：⌘/Ctrl + + 放大，− 缩小，0 恢复默认（10–24px）';
+  const smaller = button('A−', () => setFontSize(state.fontSize - 1), 'font-decrease');
+  smaller.setAttribute('aria-label', '缩小代码字号'); smaller.title = '缩小代码字号（⌘/Ctrl + −）';
+  const reset = button(`${state.fontSize}px`, () => setFontSize(DEFAULT_FONT_SIZE), 'font-reset');
+  reset.title = '恢复默认代码字号 13px（⌘/Ctrl + 0）';
+  const larger = button('A+', () => setFontSize(state.fontSize + 1), 'font-increase');
+  larger.setAttribute('aria-label', '放大代码字号'); larger.title = '放大代码字号（⌘/Ctrl + + 或 =）';
+  fonts.append(smaller, reset, larger);
+  tools.append(previous, next, current, count, fonts, wrapLabel, collapseLabel);
   header.append(tools);
+  setFontSize(state.fontSize);
   const viewport = el('div', 'editor-scroll');
   const container = el('div', 'monaco-host');
   viewport.append(container); card.append(viewport);
@@ -393,7 +428,7 @@ async function loadFile(fileId, entry = null) {
   state.selection = drafts.get(key)?.anchor || null;
   document.body.append(actions, preview);
   state.editor = createComparison(container, {
-    file, versions, entry, wrap: state.wrap, collapse: state.collapse,
+    file, versions, entry, wrap: state.wrap, collapse: state.collapse, fontSize: state.fontSize,
     onBoundary: direction => run(() => navigateFile(direction)),
     onViewportChange: schedulePosition,
     onSelect: (side, start, end, extend, columns) => { closePreview(); return selectLines(file, side, start, end, extend, columns); },

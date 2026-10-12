@@ -100,3 +100,11 @@ button:disabled { cursor: default; }
   .file-link { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+
+.font-controls { display: inline-flex; align-items: center; gap: 0; }
+.editor-tools .font-controls button { border-radius: 0; padding: 4px 6px; }
+.editor-tools .font-controls button:first-child { border-radius: 6px 0 0 6px; }
+.editor-tools .font-controls button:last-child { border-radius: 0 6px 6px 0; }
+.editor-tools .font-controls button + button { margin-left: -1px; }
+.font-controls .font-reset { min-width: 43px; font-variant-numeric: tabular-nums; }
+.font-controls [aria-disabled="true"] { opacity: .5; cursor: default; }

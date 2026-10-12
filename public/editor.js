@@ -66,11 +66,11 @@ function language(path) {
   return monaco.languages.getLanguages().find(item => item.filenames?.some(name => name.toLowerCase() === filename) || (extension && item.extensions?.includes(extension)))?.id || 'plaintext';
 }
 
-export function createComparison(container, { file, versions, onSelect, onSelectionComplete, onCommentClick, onViewportChange, onChanges, onCurrentChange, onBoundary, entry, wrap, collapse }) {
+export function createComparison(container, { file, versions, onSelect, onSelectionComplete, onCommentClick, onViewportChange, onChanges, onCurrentChange, onBoundary, entry, wrap, collapse, fontSize = 13 }) {
   const editor = monaco.editor.createDiffEditor(container, {
     readOnly: true, originalEditable: false, domReadOnly: true,
     renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false,
-    automaticLayout: true, fontSize: 13, lineHeight: 21,
+    automaticLayout: true, fontSize, lineHeight: Math.round(fontSize * 21 / 13),
     minimap: { enabled: false }, glyphMargin: true, lineNumbersMinChars: 3,
     scrollBeyondLastLine: false, renderOverviewRuler: true,
     renderIndicators: true, renderMarginRevertIcon: false, renderGutterMenu: false,
@@ -216,6 +216,10 @@ export function createComparison(container, { file, versions, onSelect, onSelect
       };
     },
     navigate,
+    fontSize(size) {
+      editor.updateOptions({ fontSize: size, lineHeight: Math.round(size * 21 / 13) });
+      onViewportChange();
+    },
     options({ wrap, collapse }) {
       editor.updateOptions({ wordWrap: wrap ? 'on' : 'off', diffWordWrap: wrap ? 'on' : 'off', hideUnchangedRegions: { enabled: collapse } });
     },

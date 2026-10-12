@@ -39,6 +39,14 @@
       <label class="field-label" for="branch">本地分支</label>
       <select id="branch"><option value="HEAD">HEAD（当前提交）</option></select>
       <p class="history-hint">仅显示未 push 的主线提交；基于本地远程记录，不自动 fetch。</p>
+      <div class="commit-filter">
+        <label class="field-label" for="commit-search">搜索已加载提交</label>
+        <input id="commit-search" type="search" placeholder="标题、作者或 SHA">
+        <span id="hidden-count" role="status">本仓库已隐藏 0 条</span>
+        <div class="commit-filter-actions"><button id="show-hidden" type="button" aria-pressed="false">查看隐藏项</button><button id="restore-commits" type="button" disabled>恢复全部</button></div>
+        <label class="commit-select-all"><input id="select-commits" type="checkbox">全选当前已加载列表</label>
+        <button id="hide-commits" type="button" disabled>隐藏所选（0）</button>
+      </div>
       <div id="commits" class="commit-list"></div>
       <button id="more" class="load-more" type="button" hidden>加载更多提交</button>
     </aside>

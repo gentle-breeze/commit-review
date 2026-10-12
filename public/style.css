@@ -110,7 +110,9 @@ button:disabled { cursor: default; }
 .font-controls [aria-disabled="true"] { opacity: .5; cursor: default; }
 
 .reply-thread > summary { cursor: pointer; color: var(--accent); font-size: 12px; padding: 8px 0; }
-.reply-content { max-height: 360px; overflow: auto; overscroll-behavior: contain; }
+.reply-content { max-height: 360px; overflow: auto; }
+/* The dialog history owns scrolling; a second scroll container traps wheel/touch input. */
+#reply-history .reply-content { max-height: none; overflow: visible; }
 .comment-preview .reply-content { max-height: 240px; }
 #comments-resizer { cursor: col-resize; touch-action: none; background: var(--border); position: relative; }
 #comments-resizer::after { content: ''; position: absolute; top: 45%; left: 2px; width: 2px; height: 36px; border-radius: 2px; background: var(--muted); }
@@ -122,3 +124,8 @@ button:disabled { cursor: default; }
   .comments { border-left: 0; }
 }
 @media (max-width: 1100px) { #comments-resizer { display: none; } }
+
+.commit-filter{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;font-size:11px;color:var(--muted)}
+.commit-filter input[type=search]{width:100%;min-width:0;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit}
+.commit-filter-actions{display:flex;gap:5px;flex-wrap:wrap}.commit-filter button{font-size:11px;padding:6px 8px}
+.commit-select-all{display:flex;align-items:center;gap:5px;cursor:pointer}.commit-row{display:flex;align-items:flex-start;gap:3px}.commit-row .commit{flex:1;min-width:0;width:auto}.commit-select{flex:none;margin:16px 0 0;accent-color:var(--accent)}

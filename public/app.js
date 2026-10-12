@@ -1,3 +1,4 @@
+import { readHiddenCommits, writeHiddenCommits, visibleCommits } from './commit-filter.js';
 import { createComparison } from './editor.js';
 import { renderCommentText } from './comment-format.js';
 
@@ -123,11 +124,68 @@ document.addEventListener('scroll', event => { if (!commitPreview.contains(event
 window.addEventListener('resize', hideCommitPreview);
 window.visualViewport?.addEventListener('resize', hideCommitPreview);
 window.visualViewport?.addEventListener('scroll', hideCommitPreview);
+let hiddenCommits = new Set(), selectedCommits = new Set(), preferenceRepository = null;
+let showingHidden = false;
+const listedCommits = () => visibleCommits(state.commits, hiddenCommits, showingHidden, $('#commit-search').value);
+function commitEmptyMessage() {
+  if (!state.commits.length) return state.historyMessage || '没有未 push 的提交';
+  return showingHidden ? '当前搜索 / 已加载范围内没有隐藏提交。' : '当前搜索 / 已加载范围内没有可见提交。可清空搜索、查看隐藏项或加载更多。';
+}
+function clearCommitDetail() {
+  disposeEditor(); state.generation++; state.diff = null; state.selection = null; state.requestedSha = null;
+  empty($('#commit-detail'), commitEmptyMessage());
+  $('#files').replaceChildren(); $('#diff').replaceChildren(); renderComments();
+}
+function updateCommitActions() {
+  const listed = listedCommits();
+  const ids = new Set(listed.map(commit => commit.sha));
+  selectedCommits = new Set([...selectedCommits].filter(sha => ids.has(sha)));
+  const all = $('#select-commits');
+  all.checked = listed.length > 0 && selectedCommits.size === listed.length;
+  all.indeterminate = selectedCommits.size > 0 && selectedCommits.size < listed.length;
+  all.disabled = !listed.length;
+  $('#hide-commits').disabled = !selectedCommits.size;
+  $('#hide-commits').textContent = `${showingHidden ? '恢复' : '隐藏'}所选（${selectedCommits.size}）`;
+  $('#hidden-count').textContent = `本仓库已隐藏 ${hiddenCommits.size} 条`;
+  $('#show-hidden').textContent = showingHidden ? '返回关注列表' : '查看隐藏项';
+  $('#show-hidden').setAttribute('aria-pressed', String(showingHidden));
+  $('#restore-commits').disabled = !hiddenCommits.size;
+}
+async function reconcileCommit() {
+  const listed = listedCommits();
+  const current = state.diff?.sha || state.requestedSha;
+  if (listed.some(commit => commit.sha === current)) return;
+  if (listed.length) await loadDiff(listed[0].sha);
+  else clearCommitDetail();
+}
+function saveHiddenCommits() {
+  try { writeHiddenCommits(localStorage, preferenceRepository, hiddenCommits); }
+  catch { notice('浏览器无法保存隐藏偏好；本次页面内仍有效，重新打开后可能丢失。'); }
+}
+$('#select-commits').addEventListener('change', event => {
+  selectedCommits = new Set(event.target.checked ? listedCommits().map(commit => commit.sha) : []);
+  for (const input of document.querySelectorAll('.commit-select')) input.checked = selectedCommits.has(input.value);
+  updateCommitActions();
+});
+$('#hide-commits').addEventListener('click', () => run(async () => {
+  for (const sha of selectedCommits) showingHidden ? hiddenCommits.delete(sha) : hiddenCommits.add(sha);
+  selectedCommits.clear(); saveHiddenCommits(); renderCommits(); await reconcileCommit();
+}));
+$('#show-hidden').addEventListener('click', () => run(async () => {
+  showingHidden = !showingHidden; selectedCommits.clear(); renderCommits(); await reconcileCommit();
+}));
+$('#restore-commits').addEventListener('click', () => run(async () => {
+  hiddenCommits.clear(); selectedCommits.clear(); showingHidden = false;
+  saveHiddenCommits(); renderCommits(); await reconcileCommit();
+}));
+$('#commit-search').addEventListener('input', () => run(async () => {
+  selectedCommits.clear(); renderCommits(); await reconcileCommit();
+}));
 function renderCommits() {
   hideCommitPreview();
   const target = $('#commits');
   target.replaceChildren();
-  for (const commit of state.commits) {
+  for (const commit of listedCommits()) {
     const node = button('', () => run(() => loadDiff(commit.sha)), `commit${state.diff?.sha === commit.sha ? ' active' : ''}`);
     node.append(el('span', 'commit-subject', commit.subject));
     const meta = el('span', 'commit-meta');
@@ -138,9 +196,18 @@ function renderCommits() {
     node.addEventListener('focus', () => showCommitPreview(node, commit));
     node.addEventListener('blur', hideCommitPreview);
     node.addEventListener('click', hideCommitPreview);
-    target.append(node);
+    const row = el('div', 'commit-row');
+    const select = el('input', 'commit-select');
+    select.type = 'checkbox'; select.value = commit.sha; select.checked = selectedCommits.has(commit.sha);
+    select.setAttribute('aria-label', `选择提交 ${commit.sha.slice(0, 8)} ${commit.subject}`);
+    select.addEventListener('change', () => {
+      select.checked ? selectedCommits.add(commit.sha) : selectedCommits.delete(commit.sha);
+      updateCommitActions();
+    });
+    row.append(select, node); target.append(row);
   }
-  if (!state.commits.length) empty(target, state.historyMessage || '没有未 push 的提交');
+  if (!listedCommits().length) empty(target, commitEmptyMessage());
+  updateCommitActions();
   $('#more').hidden = !state.hasMore;
 }
 async function loadCommits(append = false) {
@@ -154,20 +221,16 @@ async function loadCommits(append = false) {
     ? `无可用远程跟踪分支，对比本地 ${result.comparisonRef.replace('refs/heads/', '')}；仅显示相对基准独有的主线提交，不代表远程 push 状态。`
     : `${result.comparisonRef ? `对比 ${result.comparisonRef.replace('refs/remotes/', '')}。` : ''}仅显示未 push 的主线提交；基于本地远程记录，不自动 fetch。`;
   $('.history h1').textContent = result.comparisonMode === 'local-base' ? '分支独有提交' : '未 push 的提交';
+  if (!append) selectedCommits.clear();
   renderCommits();
-  if (!append && state.commits.length) await loadDiff(state.commits[0].sha);
-  else if (!state.commits.length) {
-    disposeEditor();
-    state.generation++;
-    state.diff = null;
-    state.selection = null;
-    empty($('#commit-detail'), state.historyMessage || '没有未 push 的提交');
-    $('#files').replaceChildren();
-    $('#diff').replaceChildren();
-    renderComments();
-  }
+  if (!append) {
+    const first = listedCommits()[0];
+    if (first) await loadDiff(first.sha);
+    else clearCommitDetail();
+  } else await reconcileCommit();
 }
 async function loadDiff(sha) {
+  state.requestedSha = sha;
   disposeEditor();
   const generation = ++state.generation;
   state.selection = null;
@@ -801,6 +864,11 @@ async function init() {
       $('#project-error').textContent = error.message;
     }
     return;
+  }
+  if (preferenceRepository !== state.info.repository) {
+    preferenceRepository = state.info.repository; hiddenCommits = new Set(); selectedCommits.clear(); showingHidden = false;
+    try { hiddenCommits = readHiddenCommits(localStorage, preferenceRepository); }
+    catch { notice('浏览器隐藏偏好不可用；仍可在本次页面中隐藏提交。'); }
   }
   $('#repository').textContent = state.info.repository;
   $('#repository').title = state.info.repository;

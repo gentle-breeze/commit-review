@@ -66,7 +66,7 @@ function language(path) {
   return monaco.languages.getLanguages().find(item => item.filenames?.some(name => name.toLowerCase() === filename) || (extension && item.extensions?.includes(extension)))?.id || 'plaintext';
 }
 
-export function createComparison(container, { file, versions, onSelect, onSelectionComplete, onCommentClick, onViewportChange, onChanges, onCurrentChange, onBoundary, entry, wrap, collapse, fontSize = 13 }) {
+export function createComparison(container, { file, versions, onSelect, onSelectionComplete, onCommentClick, onViewportChange, onChanges, onCurrentChange, onBoundary, entry, wrap, collapse, fontSize = 17 }) {
   const editor = monaco.editor.createDiffEditor(container, {
     readOnly: true, originalEditable: false, domReadOnly: true,
     renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false,

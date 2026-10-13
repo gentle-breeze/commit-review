@@ -258,45 +258,45 @@ try {
     await cdp('Input.dispatchKeyEvent', {type:'keyDown', key, code, modifiers, windowsVirtualKeyCode:key === '-' ? 189 : key === '0' ? 48 : 187});
     await cdp('Input.dispatchKeyEvent', {type:'keyUp', key, code, modifiers});
   };
-  assert.deepEqual(await codeFonts(), ['13px', '13px']);
+  assert.deepEqual(await codeFonts(), ['17px', '17px']);
   await evaluate('document.querySelector(".font-reset").focus()');
   await zoomKey('+', 12); // Cmd+Shift+= on Mac keyboards.
-  await wait('document.querySelector(".font-reset").textContent === "14px"');
-  assert.deepEqual(await codeFonts(), ['14px', '14px']);
+  await wait('document.querySelector(".font-reset").textContent === "18px"');
+  assert.deepEqual(await codeFonts(), ['18px', '18px']);
   assert.equal(await evaluate('innerWidth'), 1600, 'font shortcut does not zoom the page');
   await zoomKey('-', 2); // Ctrl equivalent.
-  assert.deepEqual(await codeFonts(), ['13px', '13px']);
+  assert.deepEqual(await codeFonts(), ['17px', '17px']);
   await zoomKey('=', 2);
-  assert.deepEqual(await codeFonts(), ['14px', '14px']);
+  assert.deepEqual(await codeFonts(), ['18px', '18px']);
   await zoomKey('0', 4);
-  assert.deepEqual(await codeFonts(), ['13px', '13px']);
+  assert.deepEqual(await codeFonts(), ['17px', '17px']);
   await evaluate('for(let i=0;i<30;i++) document.querySelector(".font-increase").click()');
   assert.deepEqual(await codeFonts(), ['24px', '24px']);
   assert.equal(await evaluate('document.querySelector(".font-increase").getAttribute("aria-disabled")'), 'true');
   await evaluate('document.querySelector(".font-increase").focus()');
   await zoomKey('0', 2);
-  assert.deepEqual(await codeFonts(), ['13px', '13px'], 'reset still works at the upper limit');
+  assert.deepEqual(await codeFonts(), ['17px', '17px'], 'reset still works at the upper limit');
   await evaluate('for(let i=0;i<20;i++) document.querySelector(".font-decrease").click()');
   assert.deepEqual(await codeFonts(), ['10px', '10px']);
   assert.equal(await evaluate('document.querySelector(".font-decrease").getAttribute("aria-disabled")'), 'true');
   await evaluate('document.querySelector(".font-reset").click();document.querySelector(".font-increase").click();document.querySelectorAll(".file-link")[1].click()');
-  await wait('document.querySelector(".file-link.active").textContent.startsWith("navigation.txt") && document.querySelector(".font-reset")?.textContent === "14px"');
-  assert.deepEqual(await codeFonts(), ['14px', '14px'], 'size survives file changes');
+  await wait('document.querySelector(".file-link.active").textContent.startsWith("navigation.txt") && document.querySelector(".font-reset")?.textContent === "18px"');
+  assert.deepEqual(await codeFonts(), ['18px', '18px'], 'size survives file changes');
   await evaluate('document.querySelectorAll(".file-link")[0].click()');
-  await wait('document.querySelector(".file-link.active").textContent.startsWith("example.js") && document.querySelector(".font-reset")?.textContent === "14px"');
+  await wait('document.querySelector(".file-link.active").textContent.startsWith("example.js") && document.querySelector(".font-reset")?.textContent === "18px"');
   await evaluate('document.querySelector(".font-reset").click()');
   const codeInput = await evaluate('document.querySelector(".editor.modified .inputarea, .editor.modified .native-edit-context, .editor.modified .ime-text-area")?.className');
   assert.ok(codeInput, 'Monaco keyboard target exists');
   await evaluate('document.querySelector(".editor.modified .inputarea, .editor.modified .native-edit-context, .editor.modified .ime-text-area").focus()');
   await zoomKey('+', 12);
-  assert.deepEqual(await codeFonts(), ['14px', '14px'], 'shortcut works inside Monaco');
+  assert.deepEqual(await codeFonts(), ['18px', '18px'], 'shortcut works inside Monaco');
   await zoomKey('0', 4);
   assert.equal(await evaluate(`(() => {const event=new KeyboardEvent('keydown',{key:'+',metaKey:true,isComposing:true,bubbles:true,cancelable:true});document.activeElement.dispatchEvent(event);return event.defaultPrevented;})()`), false, 'composition is not intercepted');
   await evaluate('document.querySelector("#refresh").focus()');
   assert.equal(await evaluate(`(() => {const event=new KeyboardEvent('keydown',{key:'+',metaKey:true,bubbles:true,cancelable:true});document.activeElement.dispatchEvent(event);return event.defaultPrevented;})()`), false, 'outside the diff native zoom is not intercepted');
   await cdp('Page.reload');
-  await wait('document.querySelector(".font-reset")?.textContent === "13px" && document.querySelectorAll(".monaco-editor .line-numbers").length >= 6');
-  assert.deepEqual(await codeFonts(), ['13px', '13px'], 'refresh restores the default');
+  await wait('document.querySelector(".font-reset")?.textContent === "17px" && document.querySelectorAll(".monaco-editor .line-numbers").length >= 6');
+  assert.deepEqual(await codeFonts(), ['17px', '17px'], 'refresh restores the default');
   const commitPoint = await evaluate('(() => {const r=document.querySelector("#commits .commit").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()');
   await cdp('Input.dispatchMouseEvent', {type:'mouseMoved', ...commitPoint});
   await wait('!document.querySelector(".commit-preview").hidden');
@@ -406,7 +406,7 @@ try {
   const beforeTyping = await evaluate('document.querySelector(".current-change").textContent');
   await evaluate('document.querySelector("#inline-comment-body").focus()');
   assert.equal(await evaluate(`(() => {const input=document.activeElement;const before=input.value;const event=new KeyboardEvent('keydown',{key:'+',ctrlKey:true,bubbles:true,cancelable:true});input.dispatchEvent(event);return !event.defaultPrevented && input.value===before;})()`), true, 'comment input keeps its keyboard behavior');
-  assert.deepEqual(await codeFonts(), ['13px', '13px']);
+  assert.deepEqual(await codeFonts(), ['17px', '17px']);
   await press('['); await press(']');
   await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: '】', code: 'BracketRight', text: '】', windowsVirtualKeyCode: 221 });
   await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: '】', code: 'BracketRight' });
@@ -423,7 +423,7 @@ try {
   const editorHeightBeforeSelection = await evaluate('document.querySelector(".monaco-host").getBoundingClientRect().height');
   const dragPoints = await evaluate(`(() => {
     const lines = document.querySelectorAll('.editor.modified .view-lines .view-line');
-    return [lines[0], lines[1]].map(line => { const box = line.getBoundingClientRect(); return {x:box.x+24,y:box.y+box.height/2}; });
+    return [lines[0], lines[1]].map(line => { const box = line.getBoundingClientRect(); const ctx=document.createElement("canvas").getContext("2d");ctx.font=getComputedStyle(line).font;return {x:box.x+ctx.measureText("mmm").width+0.1,y:box.y+box.height/2}; });
   })()`);
   await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...dragPoints[0] });
   await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...dragPoints[0], button: 'left', clickCount: 1 });
@@ -504,7 +504,7 @@ try {
   await wait('document.querySelectorAll(".comment-card").length === 1 && document.querySelector(".change-count")?.textContent === "1 处变更"');
   const codePoint = async (side, line) => evaluate(`(() => {
     const node = document.querySelectorAll('.editor.${side === 'old' ? 'original' : 'modified'} .view-lines .view-line')[${line - 1}];
-    const r = node.getBoundingClientRect(); return {x:r.x+24,y:r.y+r.height/2};
+    const r = node.getBoundingClientRect();const ctx=document.createElement("canvas").getContext("2d");ctx.font=getComputedStyle(node).font;return {x:r.x+ctx.measureText("mmm").width+0.1,y:r.y+r.height/2};
   })()`);
   const clickCode = async (side, line) => {
     const point = await codePoint(side, line);

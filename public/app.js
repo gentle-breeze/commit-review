@@ -1,3 +1,4 @@
+import { createFileIndexView } from './file-history.js';
 import { isTestFile, visibleFiles, readSkipTestFiles, skipTestFilesKey, focusShortcut } from './review-options.js';
 import { commentRevision, reviewComments, nextReviewComment } from './comment-view.js';
 import { readHiddenCommits, writeHiddenCommits, visibleCommits } from './commit-filter.js';
@@ -5,7 +6,7 @@ import { createComparison } from './editor.js';
 import { renderCommentText } from './comment-format.js';
 
 const $ = selector => document.querySelector(selector);
-const DEFAULT_FONT_SIZE = 13, MIN_FONT_SIZE = 10, MAX_FONT_SIZE = 24;
+const DEFAULT_FONT_SIZE = 17, MIN_FONT_SIZE = 10, MAX_FONT_SIZE = 24;
 const state = { info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true, fontSize: DEFAULT_FONT_SIZE };
 
 const drafts = new Map();
@@ -31,8 +32,8 @@ function notice(text, error = false) {
   $('#notice').className = `notice${error ? ' error' : ''}`;
   $('#notice').hidden = !text;
 }
-async function api(route, method = 'GET', body, session = state.info) {
-  const response = await fetch(route, { method, headers: {
+async function api(route, method = 'GET', body, session = state.info, signal) {
+  const response = await fetch(route, { method, signal, headers: {
     ...(session ? { 'X-Review-Token': session.token, ...(session.projectId ? { 'X-Review-Project': session.projectId } : {}) } : {}),
     ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
   }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
@@ -281,16 +282,17 @@ function renderCommits() {
   updateCommitActions();
   $('#more').hidden = !state.hasMore;
   const linked = $('#comment-commit'); linked.replaceChildren();
-  if (state.diff && state.commentLocatedSha === state.diff.sha && commentVisible(state.diff) && !listedCommits().some(commit => commit.sha === state.diff.sha)) {
+  if (state.diff && (state.commentLocatedSha === state.diff.sha || state.indexLocatedSha === state.diff.sha) && commentVisible(state.diff) && !listedCommits().some(commit => commit.sha === state.diff.sha)) {
     const sha = state.diff.sha;
     const node = button('', () => run(() => loadDiff(sha)), 'commit active linked-comment-commit');
     node.dataset.commitSha = sha; node.setAttribute('aria-current', 'true');
-    node.append(el('span', 'commit-subject', state.diff.subject), el('span', 'commit-meta', `${sha.slice(0, 8)} · 评论关联提交（不在当前已加载 / 搜索列表）`));
+    node.append(el('span', 'commit-subject', state.diff.subject), el('span', 'commit-meta', `${sha.slice(0, 8)} · ${state.indexLocatedSha === sha ? '文件索引关联提交' : '评论关联提交'}（不在当前已加载 / 搜索列表）`));
     linked.append(node);
   }
   linked.hidden = !linked.childElementCount;
 }
 async function loadCommits(append = false) {
+  if (!append) fileIndexView.invalidate();
   const generation = ++state.listGeneration;
   const result = await api(`/api/commits?ref=${encodeURIComponent(state.ref)}&offset=${append ? state.commits.length : 0}`);
   if (generation !== state.listGeneration) return;
@@ -309,7 +311,7 @@ async function loadCommits(append = false) {
     else clearCommitDetail();
   } else await reconcileCommit();
 }
-async function loadDiff(sha, entry = null) {
+async function loadDiff(sha, entry = null, initialFileId) {
   state.requestedSha = sha;
   disposeEditor();
   const generation = ++state.generation;
@@ -321,12 +323,12 @@ async function loadDiff(sha, entry = null) {
   empty($('#diff'), '正在读取 diff…');
   renderComments();
   try {
-    const diff = await api(`/api/diff?sha=${encodeURIComponent(sha)}`);
+    const diff = await api(`/api/diff?sha=${encodeURIComponent(sha)}${initialFileId !== undefined && Number(initialFileId)>=300 ? `&fileId=${encodeURIComponent(initialFileId)}` : ''}`);
     if (generation !== state.generation) return;
     state.diff = diff;
     updateFocusCommit();
     renderCommits();
-    await renderDiff(entry);
+    await renderDiff(entry, initialFileId);
     renderComments();
   } catch (error) {
     if (generation === state.generation) {
@@ -346,7 +348,7 @@ function disposeEditor() {
   state.fileLoading = false;
   state.versions = null;
 }
-async function renderDiff(entry = null) {
+async function renderDiff(entry = null, initialFileId) {
   disposeEditor();
   const diff = state.diff;
   const detail = $('#commit-detail');
@@ -354,11 +356,12 @@ async function renderDiff(entry = null) {
   const meta = el('div', 'detail-meta');
   meta.append(el('code', '', diff.sha), el('div', '', diff.parent ? `与${diff.parents.length > 1 ? '第一父提交' : '父提交'} ${diff.parent.slice(0, 8)} 比较` : '根提交 · 与空树比较'));
   detail.append(meta);
+  if (diff.focusedFileId !== undefined) detail.append(el('p', '', '仅显示索引选中的文件（此提交超过普通列表显示范围）。'), button('查看此提交全部文件', () => run(() => loadDiff(diff.sha))));
   $('#files').replaceChildren();
   $('#diff').replaceChildren();
   if (diff.truncated) detail.append(el('div', 'warning', '提交摘要有截断；全文按文件单独加载，最多列出 300 个文件。'));
   const files = renderFileList();
-  if (files.length) await loadFile(entry === 'previous' ? files.at(-1).id : files[0].id, entry);
+  if (files.length) await loadFile(files.find(file=>file.id===initialFileId)?.id ?? (entry === 'previous' ? files.at(-1).id : files[0].id), entry);
   else {
     empty($('#diff'), diff.files.length ? '当前提交的文件均被跳过；关闭“跳过 *Test 文件”可查看。' : '此提交没有文件差异');
     $('#diff').append(button('[ 上一处 · 上一个提交', () => run(() => navigateFile('previous')), 'previous-empty-commit'), button('] 下一处 · 下一个提交', () => run(() => navigateFile('next')), 'next-empty-commit'));
@@ -535,7 +538,7 @@ async function loadFile(fileId, entry = null) {
   const smaller = button('A−', () => setFontSize(state.fontSize - 1), 'font-decrease');
   smaller.setAttribute('aria-label', '缩小代码字号'); smaller.title = '缩小代码字号（⌘/Ctrl + −）';
   const reset = button(`${state.fontSize}px`, () => setFontSize(DEFAULT_FONT_SIZE), 'font-reset');
-  reset.title = '恢复默认代码字号 13px（⌘/Ctrl + 0）';
+  reset.title = `恢复默认代码字号 ${DEFAULT_FONT_SIZE}px（⌘/Ctrl + 0）`;
   const larger = button('A+', () => setFontSize(state.fontSize + 1), 'font-increase');
   larger.setAttribute('aria-label', '放大代码字号'); larger.title = '放大代码字号（⌘/Ctrl + + 或 =）';
   fonts.append(smaller, reset, larger);
@@ -1142,5 +1145,26 @@ window.addEventListener('beforeunload', event => {
       $('#comment-dialog').open && $('#comment-body').value !== state.editing?.body) {
     event.preventDefault(); event.returnValue = '';
   }
+});
+const fileIndexView = createFileIndexView({
+  getContext: () => ({repository:state.info?.repository,session:state.info,ref:state.ref,hidden:hiddenCommits,showHidden:showingHidden,skipTests:skipTestFiles,comments:state.comments}),
+  loadPage: async (params, context, signal) => {
+    if (!params.snapshot) {
+      const comments = await api('/api/comments','GET',undefined,context.session,signal);
+      if (state.info === context.session) { state.comments = comments; renderComments(); }
+    }
+    return api(`/api/file-index?${new URLSearchParams(params)}`, 'GET', undefined, context.session, signal);
+  },
+  onError: message => notice(message,true),
+  openChange: async ({commit,file}, comment, context) => {
+    if(state.info?.repository!==context.repository || state.ref!==context.ref || !commentVisible(commit) || skipTestFiles&&isTestFile(file.path))return;
+    state.indexLocatedSha=commit.sha;
+    await loadDiff(commit.sha,null,file.id);
+    if(state.info?.repository!==context.repository || state.ref!==context.ref || state.diff?.sha!==commit.sha || state.file?.id!==file.id)return;
+    if(comment){
+      commentsOpen=true;$('#comment-scope').value='commit';updatePanels();renderComments();
+      if(!await openReviewComment(comment))openReply(comment);
+    }
+  },
 });
 run(init);

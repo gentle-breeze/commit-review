@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { GitRepo, validateAnchor } from './lib/git.mjs';
 import { ReviewStore } from './lib/reviews.mjs';
+import { FileIndex } from './lib/file-index.mjs';
 import { discoverProjects } from './lib/projects.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -70,7 +71,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
       try {
         await writeFile(path.join(lock, 'pid'), String(process.pid));
         const store = await ReviewStore.open(dataDir, repo.path);
-        sessions.set(key, { id: key, repo, store, lock, token: randomBytes(32).toString('hex'), cachedDiff: null });
+        sessions.set(key, { id: key, repo, store, lock, token: randomBytes(32).toString('hex'), cachedDiff: null, fileIndex: new FileIndex(repo) });
       } catch (error) { await rm(lock, { recursive: true, force: true }); throw error; }
       return info(sessions.get(key));
     });
@@ -83,9 +84,9 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
   }
   // Legacy unscoped requests work only for a fixed default or a single open repository.
   const legacySession = () => defaultSession || (sessions.size === 1 ? sessions.values().next().value : undefined);
-  async function getDiff(session, sha) {
-    if (session.cachedDiff?.sha === sha) return session.cachedDiff;
-    const result = await session.repo.diff(sha);
+  async function getDiff(session, sha, fileId) {
+    if (session.cachedDiff?.sha === sha && (fileId === undefined ? session.cachedDiff.focusedFileId === undefined : session.cachedDiff.files.some(file => file.id === fileId))) return session.cachedDiff;
+    const result = await session.repo.diff(sha, fileId);
     session.cachedDiff = result;
     return result;
   }
@@ -146,15 +147,16 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
           numberParam(url.searchParams.get('offset'), 0, 1000000),
           numberParam(url.searchParams.get('limit'), 50, 100) || 1));
       }
-      if (req.method === 'GET' && url.pathname === '/api/diff') return send(200, await getDiff(session, url.searchParams.get('sha')));
+      if (req.method === 'GET' && url.pathname === '/api/file-index') return send(200, await session.fileIndex.page({ref:url.searchParams.get('ref') || 'HEAD', snapshotId:url.searchParams.get('snapshot') || undefined, offset:numberParam(url.searchParams.get('offset'),0,4999)}));
+      if (req.method === 'GET' && url.pathname === '/api/diff') return send(200, await getDiff(session, url.searchParams.get('sha'), url.searchParams.get('fileId') ?? undefined));
       if (req.method === 'GET' && url.pathname === '/api/file') {
-        return send(200, await repo.file(await getDiff(session, url.searchParams.get('sha')), url.searchParams.get('fileId')));
+        return send(200, await repo.file(await getDiff(session, url.searchParams.get('sha'), url.searchParams.get('fileId') ?? undefined), url.searchParams.get('fileId')));
       }
       if (req.method === 'GET' && url.pathname === '/api/comments') return send(200, store.list());
       if (req.method === 'POST' && url.pathname === '/api/comments') {
         const data = await readJson(req);
         if (!data || typeof data !== 'object') throw new Error('评论数据无效');
-        const diff = await getDiff(session, data.sha);
+        const diff = await getDiff(session, data.sha, data.anchor?.fileId);
         const anchor = validateAnchor(diff, data.anchor || {}, await repo.file(diff, data.anchor?.fileId));
         return send(201, await store.add({ sha: diff.sha, parent: diff.parent, anchor, body: data.body }));
       }

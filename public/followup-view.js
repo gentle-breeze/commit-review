@@ -15,9 +15,13 @@ export function createFollowupView({getContext,api,reload,onError}) {
   }
   function renderLinks(){
     const target=$('#followup-links');target.replaceChildren();
+    if(!(comment.followups||[]).some(link=>!link.removedAt))target.append(node('p','尚无有效后续关联（待关联）；证据不足时可保留候选在回复中，不必强行关联。'));
+    else target.append(node('p','纠正目标时，可移除错误关联，再预览并添加正确目标；原记录保留。'));
     for(const link of comment.followups||[]){
-      const row=node('div',`${link.removedAt?'已移除（记录保留）':'人工关联 · 待对照复核'} · ${link.sha.slice(0,8)} · ${link.path}:${link.startLine}–${link.endLine}`);
+      const row=node('div',`${link.removedAt?'已移除（记录保留）':link.createdBy==='ai'?(link.confirmedAt?'AI关联 · 用户已确认 · 待复核':'AI初步关联 · 待复核'):'人工关联 · 待对照复核'} · ${link.sha.slice(0,8)} · ${link.path}:${link.startLine}–${link.endLine}`);
+      if(link.evidence)row.append(node('p',`AI依据：${link.evidence}`));
       if(!link.removedAt){
+        if(link.createdBy==='ai'&&!link.confirmedAt)row.append(button('确认此初步关联',()=>save({confirmId:link.id})));
         row.append(button('查看对照',()=>{fill(link);load(link);}),button('移除此关联',()=>save({removeId:link.id})));
       }
       target.append(row);

@@ -160,24 +160,32 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
         const anchor = validateAnchor(diff, data.anchor || {}, await repo.file(diff, data.anchor?.fileId));
         return send(201, await store.add({ sha: diff.sha, parent: diff.parent, anchor, body: data.body }));
       }
-      const linkMatch = /^\/api\/comments\/([a-f0-9-]{36})\/(target|links)$/.exec(url.pathname);
+      const latestMatch=/^\/api\/comments\/([a-f0-9-]{36})\/latest$/.exec(url.pathname);
+      if(latestMatch&&req.method==='POST'){
+        const comment=store.list().find(item=>item.id===latestMatch[1]);if(!comment)throw new Error('评论不存在');
+        const data=await readJson(req);
+        if(!data||!Array.isArray(data.ids)||data.ids.length>100||Object.keys(data).some(key=>key!=='ids')||data.ids.some(id=>typeof id!=='string'))throw new Error('关联选择范围无效');
+        return send(200,await repo.latestFollowup(comment,data.ids));
+      }
+      const linkMatch = /^\/api\/comments\/([a-f0-9-]{36})\/(target|links)(\/ai)?$/.exec(url.pathname);
       if (linkMatch) {
         const comment=store.list().find(item=>item.id===linkMatch[1]);
         if(!comment)throw new Error('评论不存在');
-        if(req.method==='GET' && linkMatch[2]==='target') return send(200,await repo.commentTarget(comment,url.searchParams.get('ref')||'HEAD',url.searchParams.get('path')||undefined));
+        if(req.method==='GET' && linkMatch[2]==='target' && !linkMatch[3]) return send(200,await repo.commentTarget(comment,url.searchParams.get('ref')||'HEAD',url.searchParams.get('path')||undefined));
         if(req.method==='POST' && linkMatch[2]==='links') {
-          const data=await readJson(req);
-          if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).some(key=>!['requestId','revision','removeId','sha','path','startLine','endLine'].includes(key)))throw new Error('关联字段无效');
-          if(data.removeId) {
-            if(Object.keys(data).some(key=>!['requestId','revision','removeId'].includes(key)))throw new Error('移除关联不能附带目标');
-            return send(200,await store.link(comment.id,{requestId:data.requestId,revision:data.revision,removeId:data.removeId}));
+          const data=await readJson(req),source=linkMatch[3]?'ai':'user';
+          const allowed=source==='ai'?['requestId','revision','sha','path','startLine','endLine','evidence']:['requestId','revision','removeId','confirmId','sha','path','startLine','endLine'];
+          if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).some(key=>!allowed.includes(key)))throw new Error('关联字段无效');
+          if(data.removeId||data.confirmId) {
+            if(data.removeId&&data.confirmId || Object.keys(data).some(key=>!['requestId','revision',data.removeId?'removeId':'confirmId'].includes(key)))throw new Error('移除关联不能附带目标');
+            return send(200,await store.link(comment.id,{requestId:data.requestId,revision:data.revision,...(data.removeId?{removeId:data.removeId}:{confirmId:data.confirmId})}));
           }
           if(!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(data.sha||''))throw new Error('请先预览并确认完整目标 SHA');
           const target=await repo.commentTarget(comment,data.sha,data.path);
           if(target.unavailable)throw new Error(target.unavailable);
           if(!Number.isInteger(data.startLine)||!Number.isInteger(data.endLine)||data.startLine<1||data.endLine<data.startLine||data.endLine>target.lineCount||data.endLine-data.startLine>=200)throw new Error('目标选区必须为文件内的1–200行');
           const code=target.text.split('\n').slice(data.startLine-1,data.endLine).join('\n');
-          return send(200,await store.link(comment.id,{requestId:data.requestId,revision:data.revision,target:{sha:target.sha,path:target.path,startLine:data.startLine,endLine:data.endLine,code}}));
+          return send(200,await store.link(comment.id,{requestId:data.requestId,revision:data.revision,source,evidence:data.evidence,target:{sha:target.sha,path:target.path,startLine:data.startLine,endLine:data.endLine,code}}));
         }
       }
       const replyEditMatch = /^\/api\/comments\/([a-f0-9-]{36})\/replies\/([a-f0-9-]{36})(\/restore)?$/.exec(url.pathname);

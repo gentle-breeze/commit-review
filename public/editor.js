@@ -112,6 +112,7 @@ export function createComparison(container, { file, versions, onSelect, onSelect
     onCurrentChange(current + 1, changes.length);
   };
   const navigate = direction => {
+    if (editor.getLineChanges() === null) return;
     const next = current + (direction === 'previous' ? -1 : 1);
     if (!changes.length || next < 0 || next >= changes.length) { onBoundary(direction); return; }
     activate(next, true);

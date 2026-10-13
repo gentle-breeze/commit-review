@@ -169,3 +169,17 @@ test('large files explicitly truncate and reject hidden-line anchors', async t =
   assert.equal(diff.files[0].additions, 6200);
   assert.throws(() => validateAnchor(diff, { fileId: '0', side: 'new', startLine: 6100, endLine: 6100 }));
 });
+
+
+test('diff metadata retains full commit explanation for historical and empty commits', async t => {
+  const {repo, git} = await fixture(t);
+  git('commit', '--allow-empty', '-m', 'Subject', '-m', 'First paragraph\n\n<script>literal</script>\nLast line');
+  const sha = git('rev-parse', 'HEAD');
+  const diff = await repo.diff(sha);
+  assert.equal(diff.sha, sha);
+  assert.equal(diff.subject, 'Subject');
+  assert.match(diff.body, /First paragraph\n\n<script>literal<\/script>\nLast line/);
+  assert.ok(diff.author);
+  assert.ok(Number.isFinite(Date.parse(diff.date)));
+  assert.deepEqual(diff.files, []);
+});

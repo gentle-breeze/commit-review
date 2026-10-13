@@ -118,24 +118,30 @@ commitPreview.id = 'commit-message-preview';
 commitPreview.hidden = true;
 commitPreview.setAttribute('role', 'tooltip');
 document.body.append(commitPreview);
-let commitPreviewOwner = null, commitPreviewTimer;
+let commitPreviewOwner = null, commitPreviewTimer, commitPreviewPinned = false;
 function hideCommitPreview() {
+  commitPreviewPinned = false;
   clearTimeout(commitPreviewTimer);
   commitPreviewOwner?.removeAttribute('aria-describedby');
   commitPreviewOwner = null;
   commitPreview.hidden = true;
+  $('#focus-commit').setAttribute('aria-expanded', 'false');
 }
 function scheduleCommitPreviewClose() {
+  if (commitPreviewPinned) return;
   clearTimeout(commitPreviewTimer);
   commitPreviewTimer = setTimeout(hideCommitPreview, 180);
 }
 function showCommitPreview(node, commit) {
+  if (commitPreviewPinned && commitPreviewOwner === node) return;
   hideCommitPreview();
   commitPreviewOwner = node;
   node.setAttribute('aria-describedby', commitPreview.id);
   const body = el('pre', 'commit-preview-body', commit.body?.trim() ? commit.body : '此提交没有正文。');
-  commitPreview.replaceChildren(el('strong', '', commit.subject), body);
+  commitPreview.replaceChildren(el('strong', '', commit.subject), el('div', 'detail-meta', `${commit.sha} · ${commit.author || ''}${commit.date ? ` · ${date(commit.date)}` : ''}`), body);
   commitPreview.hidden = false;
+  commitPreview.scrollTop = 0;
+  if (node.id === 'focus-commit') node.setAttribute('aria-expanded', 'true');
   const viewport = window.visualViewport;
   const left = (viewport?.offsetLeft || 0) + 8, top = (viewport?.offsetTop || 0) + 8;
   const right = left + (viewport?.width || innerWidth) - 16, bottom = top + (viewport?.height || innerHeight) - 16;
@@ -144,10 +150,11 @@ function showCommitPreview(node, commit) {
   const anchor = node.getBoundingClientRect(), bounds = commitPreview.getBoundingClientRect();
   const x = anchor.right + 8 + bounds.width <= right ? anchor.right + 8 : anchor.left - bounds.width - 8;
   commitPreview.style.left = `${Math.max(left, Math.min(x, right - bounds.width))}px`;
-  commitPreview.style.top = `${Math.max(top, Math.min(anchor.top, bottom - bounds.height))}px`;
+  const y = node.id === 'focus-commit' ? (anchor.bottom + 8 + bounds.height <= bottom ? anchor.bottom + 8 : anchor.top - bounds.height - 8) : anchor.top;
+  commitPreview.style.top = `${Math.max(top, Math.min(y, bottom - bounds.height))}px`;
 }
 commitPreview.addEventListener('pointerenter', () => clearTimeout(commitPreviewTimer));
-commitPreview.addEventListener('pointerleave', scheduleCommitPreviewClose);
+commitPreview.addEventListener('pointerleave', event => { if (event.pointerType !== 'touch') scheduleCommitPreviewClose(); });
 document.addEventListener('pointerdown', event => {
   if (!commitPreview.contains(event.target) && !commitPreviewOwner?.contains(event.target)) hideCommitPreview();
 }, true);
@@ -156,6 +163,28 @@ document.addEventListener('scroll', event => { if (!commitPreview.contains(event
 window.addEventListener('resize', hideCommitPreview);
 window.visualViewport?.addEventListener('resize', hideCommitPreview);
 window.visualViewport?.addEventListener('scroll', hideCommitPreview);
+function updateFocusCommit() {
+  const node = $('#focus-commit'), commit = state.diff;
+  hideCommitPreview();
+  node.disabled = !commit;
+  node.textContent = commit ? `${commit.sha.slice(0, 8)} · ${commit.subject}` : (state.requestedSha ? '正在读取提交…' : '未选择提交');
+  node.title = commit ? '查看完整提交说明（悬停、聚焦或点击）' : '';
+}
+const focusCommit = $('#focus-commit');
+focusCommit.setAttribute('aria-controls', commitPreview.id);
+focusCommit.setAttribute('aria-expanded', 'false');
+for (const event of ['pointerenter', 'focus']) focusCommit.addEventListener(event, () => { if (state.diff) showCommitPreview(focusCommit, state.diff); });
+focusCommit.addEventListener('pointerleave', event => { if (event.pointerType !== 'touch') scheduleCommitPreviewClose(); });
+focusCommit.addEventListener('blur', () => { commitPreviewPinned = false; scheduleCommitPreviewClose(); });
+focusCommit.addEventListener('click', () => { if (state.diff) { showCommitPreview(focusCommit, state.diff); clearTimeout(commitPreviewTimer); commitPreviewPinned = true; } });
+// Let keyboard users scroll a long explanation while keeping focus on its trigger.
+focusCommit.addEventListener('keydown', event => {
+  if (commitPreview.hidden || !['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === 'Home') commitPreview.scrollTop = 0;
+  else if (event.key === 'End') commitPreview.scrollTop = commitPreview.scrollHeight;
+  else commitPreview.scrollBy(0, (event.key.endsWith('Down') ? 1 : -1) * (event.key.startsWith('Page') ? 240 : 40));
+});
 let hiddenCommits = new Set(), selectedCommits = new Set(), preferenceRepository = null;
 let showingHidden = false;
 const listedCommits = () => visibleCommits(state.commits, hiddenCommits, showingHidden, $('#commit-search').value);
@@ -165,6 +194,7 @@ function commitEmptyMessage() {
 }
 function clearCommitDetail() {
   disposeEditor(); state.generation++; state.diff = null; state.selection = null; state.requestedSha = null;
+  updateFocusCommit();
   empty($('#commit-detail'), commitEmptyMessage());
   $('#files').replaceChildren(); $('#diff').replaceChildren(); renderComments();
 }
@@ -283,6 +313,7 @@ async function loadDiff(sha) {
   const generation = ++state.generation;
   state.selection = null;
   state.diff = null;
+  updateFocusCommit();
   $('#files').replaceChildren();
   empty($('#commit-detail'), '正在读取提交…');
   empty($('#diff'), '正在读取 diff…');
@@ -291,6 +322,7 @@ async function loadDiff(sha) {
     const diff = await api(`/api/diff?sha=${encodeURIComponent(sha)}`);
     if (generation !== state.generation) return;
     state.diff = diff;
+    updateFocusCommit();
     renderCommits();
     await renderDiff();
     renderComments();
@@ -309,6 +341,7 @@ function disposeEditor() {
   state.editor?.dispose();
   state.editor = null;
   state.file = null;
+  state.fileLoading = false;
   state.versions = null;
 }
 async function renderDiff() {
@@ -330,7 +363,10 @@ async function renderDiff() {
     $('#files').append(item);
   }
   if (diff.files.length) await loadFile(diff.files[0].id);
-  else empty($('#diff'), '此提交没有文件差异');
+  else {
+    empty($('#diff'), '此提交没有文件差异');
+    $('#diff').append(button('] 下一处 · 下一个提交', () => run(() => navigateFile('next')), 'next-empty-commit'));
+  }
 }
 function setFontSize(size) {
   state.fontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
@@ -374,14 +410,43 @@ document.addEventListener('keydown', event => {
   event.preventDefault(); event.stopPropagation();
   run(() => state.editor ? state.editor.navigate(direction) : navigateFile(direction));
 }, true);
-function navigateFile(direction) {
-  const files = state.diff?.files || [];
-  const index = files.findIndex(file => file.id === state.file?.id);
-  if (index < 0) return;
-  const next = files[index + (direction === 'previous' ? -1 : 1)];
-  if (!next) { notice(direction === 'previous' ? '已到本次提交的第一个文件。' : '已到本次提交的最后一个文件。'); return; }
-  notice('');
-  return loadFile(next.id, direction);
+let navigatingDiffBoundary = false;
+async function navigateFile(direction) {
+  if (navigatingDiffBoundary || state.fileLoading || !state.diff) return;
+  navigatingDiffBoundary = true;
+  try {
+    const files = state.diff.files;
+    const index = files.findIndex(file => file.id === state.file?.id);
+    const next = files[index + (direction === 'previous' ? -1 : 1)];
+    if (next) { notice(''); await loadFile(next.id, direction); return; }
+    if (direction === 'previous') { notice('已到本次提交的第一个文件。'); return; }
+    await navigateNextCommit();
+  } finally { navigatingDiffBoundary = false; }
+}
+async function navigateNextCommit() {
+  const diff = state.diff, generation = state.generation, fileGeneration = state.fileGeneration;
+  const ref = state.ref, search = $('#commit-search').value, mode = showingHidden;
+  const hidden = [...hiddenCommits].join(',');
+  let listGeneration = state.listGeneration;
+  const valid = () => state.diff === diff && state.generation === generation && state.fileGeneration === fileGeneration &&
+    state.ref === ref && state.listGeneration === listGeneration && $('#commit-search').value === search && showingHidden === mode && [...hiddenCommits].join(',') === hidden;
+  while (valid()) {
+    const commits = listedCommits(), index = commits.findIndex(commit => commit.sha === diff.sha);
+    if (index < 0) { notice('当前提交不在当前可见列表中，请先从提交列表选择起点。'); return; }
+    const next = commits[index + 1];
+    if (next) { notice(''); await loadDiff(next.sha); return; }
+    if (!state.hasMore) { notice('已到当前排序和筛选下的最后一个可见提交。'); return; }
+    notice('正在加载后续提交…');
+    // Fetch without reconciling the selection; only this request may append its page.
+    const offset = state.commits.length;
+    const result = await api(`/api/commits?ref=${encodeURIComponent(ref)}&offset=${offset}`);
+    if (!valid()) return;
+    if (!result.commits.length && result.hasMore) throw new Error('未取得后续提交，请刷新列表后重试。');
+    state.commits = [...state.commits, ...result.commits];
+    state.hasMore = result.hasMore;
+    listGeneration = ++state.listGeneration;
+    renderCommits();
+  }
 }
 async function loadFile(fileId, entry = null) {
   disposeEditor();
@@ -391,15 +456,21 @@ async function loadFile(fileId, entry = null) {
   if (!file) return;
   state.selection = null;
   state.file = file;
+  state.fileLoading = true;
   document.querySelectorAll('.file-link').forEach(node => node.classList.toggle('active', node.dataset.file === fileId));
   empty($('#diff'), '正在加载历史文件全文…');
   let versions;
   try { versions = await api(`/api/file?sha=${diff.sha}&fileId=${encodeURIComponent(fileId)}`); }
   catch (error) {
-    if (generation === state.fileGeneration) empty($('#diff'), error.message);
+    if (generation === state.fileGeneration) {
+      state.fileLoading = false;
+      empty($('#diff'), error.message);
+      $('#diff').append(button('] 下一处', () => run(() => navigateFile('next'))));
+    }
     return;
   }
   if (generation !== state.fileGeneration || state.diff !== diff) return;
+  state.fileLoading = false;
   state.versions = versions;
   const card = el('article', 'file-card');
   card.id = `file-${file.id}`;

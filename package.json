@@ -12,7 +12,7 @@
     "prestart": "npm run build",
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:browser": "node test/browser-smoke.mjs && node test/multi-repo-browser.mjs && node test/diff-navigation-browser.mjs && node test/review-controls-browser.mjs && node test/file-index-browser.mjs && node test/followup-browser.mjs && node test/chronological-navigation-browser.mjs"
+    "test:browser": "node test/browser-smoke.mjs && node test/multi-repo-browser.mjs && node test/diff-navigation-browser.mjs && node test/review-controls-browser.mjs && node test/file-index-browser.mjs && node test/followup-browser.mjs && node test/chronological-navigation-browser.mjs && node test/reply-edit-browser.mjs"
   },
   "dependencies": {
     "monaco-editor": "0.57.0"

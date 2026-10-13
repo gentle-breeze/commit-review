@@ -180,6 +180,12 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
           return send(200,await store.link(comment.id,{requestId:data.requestId,revision:data.revision,target:{sha:target.sha,path:target.path,startLine:data.startLine,endLine:data.endLine,code}}));
         }
       }
+      const replyEditMatch = /^\/api\/comments\/([a-f0-9-]{36})\/replies\/([a-f0-9-]{36})(\/restore)?$/.exec(url.pathname);
+      if(replyEditMatch && (replyEditMatch[3] ? req.method==='POST' : ['PATCH','DELETE'].includes(req.method))) {
+        const data=await readJson(req);
+        if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).some(key=>!['body','revision','requestId'].includes(key)))throw new Error('回复修改字段无效');
+        return send(200,await store.mutateReply(replyEditMatch[1],replyEditMatch[2],{...data,action:replyEditMatch[3]?'restore':req.method==='DELETE'?'delete':'edit'}));
+      }
       const replyMatch = /^\/api\/comments\/([a-f0-9-]{36})\/(replies|ai)$/.exec(url.pathname);
       if (replyMatch && req.method === 'POST') {
         const data = await readJson(req);

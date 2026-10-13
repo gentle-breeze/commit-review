@@ -1,3 +1,4 @@
+import { createReplyManagement } from './reply-management.js';
 import { createFollowupView } from './followup-view.js';
 import { createFileIndexView } from './file-history.js';
 import { isTestFile, visibleFiles, readSkipTestFiles, skipTestFilesKey, focusShortcut } from './review-options.js';
@@ -97,7 +98,7 @@ function renderReplies(comment, context = 'sidebar') {
   thread.dataset.replyKey = key;
   thread.open = replyExpansion.get(key) ?? true;
   const summary = el('summary');
-  const label = () => { summary.textContent = `${comment.replies.length} 条回复 · ${thread.open ? '收起' : '展开'}`; };
+  const label = () => { summary.textContent = `${comment.replies.filter(reply=>!reply.deletedAt).length} 条回复${comment.replies.some(reply=>reply.deletedAt)?` · ${comment.replies.filter(reply=>reply.deletedAt).length} 条已删除`:""} · ${thread.open ? '收起' : '展开'}`; };
   label();
   summary.addEventListener('click', () => { if (!thread.open) markCommentRead(comment); });
   thread.addEventListener('toggle', () => {
@@ -108,7 +109,12 @@ function renderReplies(comment, context = 'sidebar') {
   thread.append(summary, content);
   for (const reply of comment.replies || []) {
     const item = el('article', 'reply-item');
-    item.append(el('div', 'reply-meta', `${reply.author === 'ai' ? 'AI' : '用户'} · ${date(reply.createdAt)}`), renderCommentText(el('p', 'reply-body'), reply.body));
+    item.dataset.replyId = reply.id;
+    item.append(el('div', 'reply-meta', `${reply.author === 'ai' ? 'AI' : '用户'} · ${date(reply.createdAt)}${reply.updatedAt ? ` · 用户更新 ${date(reply.updatedAt)}` : ''}`), renderCommentText(el('p', 'reply-body'), reply.deletedAt ? '此回复已删除，记录保留。' : reply.body));
+    const actions=el('div','reply-actions');
+    if(reply.deletedAt)actions.append(button('恢复回复',()=>replyManagement.open(comment,reply,'restore'),'reply-restore'));
+    else actions.append(button('编辑回复',()=>replyManagement.open(comment,reply),'reply-edit'),button('删除回复',()=>replyManagement.open(comment,reply,'delete'),'reply-delete'));
+    item.append(actions);
     content.append(item);
   }
   return thread;
@@ -1150,11 +1156,19 @@ $('#refresh').addEventListener('click', () => run(async () => {
 }));
 window.addEventListener('beforeunload', event => {
   if ([...drafts.values()].some(draft => draft.body?.trim() || draft.saving) ||
-      $('#reply-dialog').open && $('#reply-body').value.trim() ||
+      $('#reply-dialog').open && $('#reply-body').value.trim() || replyManagement.hasDraft() ||
       $('#comment-dialog').open && $('#comment-body').value !== state.editing?.body) {
     event.preventDefault(); event.returnValue = '';
   }
 });
+const replyManagement = createReplyManagement({getContext:()=>({session:state.info}),api,onError:message=>notice(message,true),reload:async updated=>{
+  await reloadComments();
+  if($('#reply-dialog').open && replyCommentId===updated.id){
+    const previous=$('#reply-history').scrollTop;
+    $('#reply-history').replaceChildren(renderReplies(state.comments.find(c=>c.id===updated.id)||updated,'dialog'));
+    $('#reply-history').scrollTop=previous;
+  }
+}});
 const followupView = createFollowupView({getContext:()=>({session:state.info,sha:state.diff?.sha}),api,reload:reloadComments,onError:message=>notice(message,true)});
 const fileIndexView = createFileIndexView({
   getContext: () => ({repository:state.info?.repository,session:state.info,ref:state.ref,hidden:hiddenCommits,showHidden:showingHidden,skipTests:skipTestFiles,comments:state.comments}),

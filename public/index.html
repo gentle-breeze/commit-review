@@ -91,6 +91,14 @@
     <label class="field-label" for="index-search">搜索文件完整路径或重命名前路径</label><input id="index-search" type="search" placeholder="例如 src/service/User.java">
     <div class="file-index-layout"><nav id="index-files" aria-label="范围内文件"></nav><section id="index-history" aria-label="文件改动历史"></section></div>
   </dialog>
+  <dialog id="reply-edit-dialog" aria-labelledby="reply-edit-title">
+    <form id="reply-edit-form">
+      <div class="dialog-heading"><h2 id="reply-edit-title">编辑回复 / 修改记录</h2><button id="reply-edit-cancel" type="button">取消</button></div>
+      <p id="reply-edit-context"></p><label for="reply-edit-body">回复正文</label><textarea id="reply-edit-body" maxlength="10000" rows="6"></textarea>
+      <details><summary>修改前记录</summary><pre id="reply-edit-history"></pre></details>
+      <p id="reply-edit-error" role="alert"></p><button id="reply-edit-refresh" type="button">刷新此回复（替换草稿）</button><button id="reply-edit-save" type="submit">保存回复</button>
+    </form>
+  </dialog>
   <dialog id="followup-dialog" aria-labelledby="followup-title">
     <div class="dialog-heading"><h2 id="followup-title">关联后续提交 / 对照复核</h2><button id="followup-close" type="button">关闭</button></div>
     <p>保留原始依据，人工确认一个或多个后续提交。关联、代码变化或文本匹配均不代表问题已解决；请追加回复说明目标 SHA、代码依据和验证结果，由人关闭评论。</p>

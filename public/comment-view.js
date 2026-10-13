@@ -3,7 +3,7 @@ export const commentShas = comment => [...new Set([comment.sha,...activeFollowup
 // Read state belongs to this page only; no review data is written.
 export function commentRevision(comment) {
   return JSON.stringify([comment.body, comment.resolved, comment.resolvedAt,
-    comment.linkRevision || 0, (comment.replies || []).map(reply => [reply.id, reply.body, reply.author])]);
+    comment.linkRevision || 0, (comment.replies || []).map(reply => [reply.id, reply.body, reply.author, reply.revision || 0, reply.deletedAt])]);
 }
 export function reviewComments(comments, {hidden, showingHidden, scope, sha, filter}) {
   return comments.filter(comment => commentShas(comment).some(value => hidden.has(value) === showingHidden && (scope === 'all' || value === sha)) &&

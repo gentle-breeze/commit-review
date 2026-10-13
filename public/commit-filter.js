@@ -12,3 +12,12 @@ export function visibleCommits(commits, hidden, showHidden = false, query = '') 
   return commits.filter(commit => hidden.has(commit.sha) === showHidden &&
     (!needle || `${commit.sha} ${commit.subject} ${commit.author}`.toLowerCase().includes(needle)));
 }
+
+// API date is Git author time (%aI), also shown in the commit list.
+// Input follows first-parent newest-first traversal; equal instants use oldest-first ancestry.
+export function chronologicalCommits(commits) {
+  return commits.map((commit,index)=>({commit,index,time:Date.parse(commit.date)}))
+    .sort((a,b)=>(Number.isFinite(a.time)&&Number.isFinite(b.time)?a.time-b.time:0)||b.index-a.index)
+    .map(item=>item.commit);
+}
+export const commitScopeKey = result => JSON.stringify([result.status,result.head,result.base,result.comparisonRef]);

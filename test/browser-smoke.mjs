@@ -383,7 +383,7 @@ try {
   await press(']');
   await wait('document.querySelector(".current-change").textContent === "当前 3 / 3"');
   await press(']');
-  await wait('document.querySelector("#commit-detail h2")?.textContent === "Add sum helper" && document.querySelector(".current-change")?.textContent === "当前 1 / 1"');
+  await wait('document.querySelector("#notice").textContent.includes("时间最新")');
   await evaluate('Array.from(document.querySelectorAll("#commits .commit")).find(n=>n.textContent.includes("Handle empty arrays")).click()');
   await wait('document.querySelector("#commit-detail h2")?.textContent === "Handle empty arrays" && document.querySelector(".current-change")?.textContent === "当前 1 / 1"');
   await evaluate('Array.from(document.querySelectorAll(".file-link")).find(n=>n.textContent.startsWith("navigation.txt")).click()');
@@ -397,7 +397,8 @@ try {
   await press('[');
   await wait('document.querySelector(".file-link.active")?.textContent.startsWith("example.js") && document.querySelector(".current-change")?.textContent === "当前 1 / 1"');
   await press('[');
-  assert.equal(await evaluate('document.querySelector(".file-link.active").textContent.startsWith("example.js")'), true, 'first file does not wrap');
+  await wait('document.querySelector("#commit-detail h2")?.textContent === "Add sum helper" && document.querySelector(".file-link.active")?.textContent.startsWith("navigation.txt") && document.querySelector(".current-change")?.textContent === "当前 1 / 1"');
+  await press(']');await wait('document.querySelector("#commit-detail h2")?.textContent === "Handle empty arrays" && document.querySelector(".file-link.active")?.textContent.startsWith("example.js") && document.querySelector(".current-change")?.textContent === "当前 1 / 1"');
   await press(']');
   await wait('document.querySelector(".file-link.active")?.textContent.startsWith("navigation.txt") && document.querySelector(".current-change")?.textContent === "当前 1 / 3"');
   await evaluate('document.querySelectorAll(".editor-tools button")[1].click()');

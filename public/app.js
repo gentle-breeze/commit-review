@@ -2,7 +2,7 @@ import { createFollowupView } from './followup-view.js';
 import { createFileIndexView } from './file-history.js';
 import { isTestFile, visibleFiles, readSkipTestFiles, skipTestFilesKey, focusShortcut } from './review-options.js';
 import { activeFollowups, commentShas, commentRevision, reviewComments, nextReviewComment } from './comment-view.js';
-import { readHiddenCommits, writeHiddenCommits, visibleCommits } from './commit-filter.js';
+import { chronologicalCommits, commitScopeKey, readHiddenCommits, writeHiddenCommits, visibleCommits } from './commit-filter.js';
 import { createComparison } from './editor.js';
 import { renderCommentText } from './comment-format.js';
 
@@ -297,6 +297,8 @@ async function loadCommits(append = false) {
   const generation = ++state.listGeneration;
   const result = await api(`/api/commits?ref=${encodeURIComponent(state.ref)}&offset=${append ? state.commits.length : 0}`);
   if (generation !== state.listGeneration) return;
+  if (append && state.commitScope !== commitScopeKey(result)) { notice('审查范围已变化，请刷新列表后继续导航。'); return; }
+  state.commitScope = commitScopeKey(result);
   state.commits = append ? [...state.commits, ...result.commits] : result.commits;
   state.hasMore = result.hasMore;
   state.historyMessage = result.message;
@@ -454,30 +456,32 @@ async function navigateFile(direction) {
 }
 async function navigateCommit(direction) {
   const diff = state.diff, generation = state.generation, fileGeneration = state.fileGeneration;
-  const skipTests = skipTestFiles;
+  const skipTests = skipTestFiles, session = state.info, scope = state.commitScope;
   const ref = state.ref, search = $('#commit-search').value, mode = showingHidden;
   const hidden = [...hiddenCommits].join(',');
   let listGeneration = state.listGeneration;
-  const valid = () => state.diff === diff && state.generation === generation && state.fileGeneration === fileGeneration &&
-    skipTestFiles === skipTests && state.ref === ref && state.listGeneration === listGeneration && $('#commit-search').value === search && showingHidden === mode && [...hiddenCommits].join(',') === hidden;
-  while (valid()) {
-    const commits = listedCommits(), index = commits.findIndex(commit => commit.sha === diff.sha);
-    if (index < 0) { notice('当前提交不在当前可见列表中，请先从提交列表选择起点。'); return; }
-    const next = commits[index + (direction === 'previous' ? -1 : 1)];
-    if (next) { notice(''); await loadDiff(next.sha, direction); return; }
-    if (direction === 'previous') { notice('已到当前排序和筛选下的第一个可见提交。'); return; }
-    if (!state.hasMore) { notice('已到当前排序和筛选下的最后一个可见提交。'); return; }
-    notice('正在加载后续提交…');
-    // Fetch without reconciling the selection; only this request may append its page.
-    const offset = state.commits.length;
-    const result = await api(`/api/commits?ref=${encodeURIComponent(ref)}&offset=${offset}`);
+  const valid = () => state.info === session && state.diff === diff && state.generation === generation && state.fileGeneration === fileGeneration &&
+    skipTestFiles === skipTests && state.ref === ref && state.listGeneration === listGeneration && state.commitScope === scope && $('#commit-search').value === search && showingHidden === mode && [...hiddenCommits].join(',') === hidden;
+  if (!listedCommits().some(commit => commit.sha === diff.sha)) { notice('当前提交不在当前可见列表中，请先从提交列表选择起点。'); return; }
+  // Author dates need not follow Git traversal order. Complete the range before choosing
+  // a chronological neighbor, without sorting the displayed list or changing selection.
+  while (valid() && state.hasMore) {
+    notice('正在补齐审查范围，以按时间顺序跨提交导航…');
+    const result = await api(`/api/commits?ref=${encodeURIComponent(ref)}&offset=${state.commits.length}`, 'GET', undefined, session);
     if (!valid()) return;
+    if (commitScopeKey(result) !== scope) { notice('审查范围已变化，请刷新列表后继续导航。'); return; }
     if (!result.commits.length && result.hasMore) throw new Error('未取得后续提交，请刷新列表后重试。');
     state.commits = [...state.commits, ...result.commits];
     state.hasMore = result.hasMore;
     listGeneration = ++state.listGeneration;
     renderCommits();
   }
+  if (!valid()) return;
+  const commits = chronologicalCommits(listedCommits()), index = commits.findIndex(commit => commit.sha === diff.sha);
+  if (index < 0) return;
+  const next = commits[index + (direction === 'previous' ? -1 : 1)];
+  if (next) { notice(''); await loadDiff(next.sha, direction); return; }
+  notice(direction === 'previous' ? '已到当前范围和筛选下时间最早的可见提交。' : '已到当前范围和筛选下时间最新的可见提交。');
 }
 async function loadFile(fileId, entry = null) {
   disposeEditor();

@@ -83,33 +83,24 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   await delay(250);
   await next();await wait('document.querySelector(".file-title")?.textContent.includes("z.txt") && document.querySelector(".change-count")?.textContent==="1 处变更"');
-  // Hide the immediate next commit. The last file should advance to the next visible empty commit.
+  const originalOrder=await evaluate('Array.from(document.querySelectorAll("#commits .commit")).map(n=>n.dataset.commitSha)');
+  await next();await wait('document.querySelector("#notice").textContent.includes("时间最新")');
+  assert.equal(await current(),'Newest');assert.equal(await evaluate('document.querySelector("#more").hidden'),true,'range completed before selecting chronological neighbor');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#commits .commit")).slice(0,50).map(n=>n.dataset.commitSha)'),originalOrder,'display order remains unchanged');
+  await choose('Oldest');await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Page filler 0"');
+  await choose('Page filler 49');await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Mode only" && document.querySelector(".change-count")?.textContent==="0 处变更"');
+  await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Binary" && document.querySelector(".warning")');
+  await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Empty newest"');
   await evaluate(`const row=Array.from(document.querySelectorAll('#commits .commit-row')).find(n=>n.textContent.includes('Hidden commit'));row.querySelector('input').click();document.querySelector('#hide-commits').click()`);
   await evaluate(`const b=Array.from(document.querySelectorAll('#diff button')).find(n=>n.textContent.includes('下一处'));for(let i=0;i<8;i++)b.click()`);
-  await wait('document.querySelector("#commit-detail h2")?.textContent==="Empty newest"');
-  assert.equal(await evaluate('document.querySelector("#focus-commit").textContent.includes("Empty newest")'),true);
-  assert.equal(await evaluate('document.querySelector("#commit-message-preview").hidden'),true,'stale explanation closes on commit change');
-  await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Binary" && document.querySelector(".warning")');
-  await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Mode only" && document.querySelector(".change-count")?.textContent==="0 处变更"');
-  await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Page filler 49"');
-  // Select the end of page one; next must fetch the following page automatically.
-  await evaluate('document.querySelectorAll("#commits .commit")[document.querySelectorAll("#commits .commit").length-1].click()');
-  await wait('document.querySelector(".next-empty-commit")');
-  const beforePage=await current();
-  await next();await wait(`document.querySelectorAll('#commits .commit').length>49 && document.querySelector('#commit-detail h2')?.textContent!==${JSON.stringify(beforePage)}`);
-  assert.equal(await evaluate('document.querySelector("#more").hidden'),true);
-  await choose('Oldest');
-  await next();await wait('document.querySelector("#notice").textContent.includes("最后一个可见提交")');
-  assert.equal(await current(),'Oldest');
-  // Filtering still determines the next visible commit, not the original adjacent SHA.
+  await wait('document.querySelector("#commit-detail h2")?.textContent==="Newest" && document.querySelector(".file-title")?.textContent.includes("a.txt")');
+  assert.equal(await evaluate('document.querySelector("#focus-commit").textContent.includes("Newest")'),true);
+  assert.equal(await evaluate('document.querySelector("#commit-message-preview").hidden'),true);
   await evaluate(`document.querySelector('#commit-search').value='newest';document.querySelector('#commit-search').dispatchEvent(new Event('input'))`);
-  await wait('document.querySelector("#commit-detail h2")?.textContent==="Newest" && document.querySelector(".change-count")?.textContent==="1 处变更"');
-  await next();await wait('document.querySelector(".file-title")?.textContent.includes("z.txt") && document.querySelector(".change-count")?.textContent==="1 处变更"');
-  await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Empty newest"');
-  await next();await wait('document.querySelector("#notice").textContent.includes("最后一个可见提交")');
-  // Fetch held in flight must not overwrite an explicit user selection.
+  await choose('Empty newest');await next();await wait('document.querySelector("#commit-detail h2")?.textContent==="Newest" && document.querySelector(".change-count")?.textContent==="1 处变更"');
+  await next();await wait('document.querySelector(".file-title")?.textContent.includes("z.txt")');await next();await wait('document.querySelector("#notice").textContent.includes("时间最新")');
   await evaluate(`document.querySelector('#commit-search').value='';document.querySelector('#commit-search').dispatchEvent(new Event('input'))`);
-  await choose('Newest');await next();await wait('document.querySelector(".file-title")?.textContent.includes("z.txt") && document.querySelector(".change-count")?.textContent==="1 处变更"');
+  await choose('Empty newest');
   await evaluate(`window.originalFetch=window.fetch;window.held=false;window.fetch=async(url,options)=>{if(url.startsWith('/api/diff?')){window.held=true;await new Promise(resolve=>window.releaseHeld=resolve);}return window.originalFetch(url,options);}`);
   await next();await wait('window.held');await evaluate('window.fetch=window.originalFetch');
   await choose('Oldest');await evaluate('window.releaseHeld()');await delay(250);

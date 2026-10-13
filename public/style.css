@@ -136,3 +136,6 @@ button:disabled { cursor: default; }
 .comment-read-state.unread{color:var(--accent);background:var(--accent-bg);font-weight:650}.comment-card.comment-current{border-color:var(--accent)}
 
 .comment-linked{margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px}
+
+.project-link{font-size:12px;color:var(--accent);text-decoration:none;white-space:nowrap;padding:6px;border-radius:6px}.project-link:hover{background:var(--accent-bg)}
+@media(max-width:1100px){.topbar{flex-wrap:wrap;height:auto;min-height:60px}.project-link{font-size:11px}}

@@ -59,12 +59,25 @@ try {
     const request = pending.get(data.id);
     if (request) { pending.delete(data.id); data.error ? request.reject(new Error(data.error.message)) : request.resolve(data.result); }
   });
-  const cdp = (method, params = {}) => new Promise((resolve, reject) => {
+  const rawCdp = (method, params = {}) => new Promise((resolve, reject) => {
     const current = ++id;
     const timer = setTimeout(() => { pending.delete(current); reject(new Error(`CDP timeout: ${method}`)); }, 10000);
     pending.set(current, { resolve: result => { clearTimeout(timer); resolve(result); }, reject: error => { clearTimeout(timer); reject(error); } });
     socket.send(JSON.stringify({ id: current, method, params }));
   });
+  const cdp = async (method, params = {}) => {
+    if (!['Page.reload', 'Page.navigate'].includes(method)) return rawCdp(method, params);
+    const previous = await rawCdp('Runtime.evaluate', {expression:'performance.timeOrigin', returnByValue:true});
+    const result = await rawCdp(method, params);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        const current = await rawCdp('Runtime.evaluate', {expression:'({origin:performance.timeOrigin,ready:document.readyState})', returnByValue:true});
+        if (current.result.value?.origin !== previous.result.value && current.result.value?.ready === 'complete') return result;
+      } catch {}
+      await delay(100);
+    }
+    throw new Error(`Navigation did not complete: ${method}`);
+  };
   const evaluate = async expression => {
     const result = await cdp('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
@@ -622,7 +635,8 @@ try {
   await wait('document.querySelector("#notice").textContent.includes("AI 指令已复制")');
   const aiInstructions = await evaluate('navigator.clipboard.readText()');
   assert.match(aiInstructions, /ai-review\.mjs/);
-  assert.match(aiInstructions, / resolve --repo /);
+  assert.doesNotMatch(aiInstructions, / (resolve|reopen) --repo /);
+  assert.match(aiInstructions, / reply --repo /);
   assert.ok(aiInstructions.includes(url), 'AI instruction targets the actual server port');
   assert.match(aiInstructions, /不要直接修改评论 JSON/);
   const threadId = app.store.list()[0].id;

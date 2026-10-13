@@ -52,7 +52,7 @@ test('AI CLI rejects wrong repositories, unsafe URLs, forged operations and inva
   for (const url of ['https://localhost:4318', 'http://example.com', 'http://user:secret@localhost', 'http://127.0.0.1/path', 'http://localhost/?token=x', 'http://localhost/#fragment']) {
     await assert.rejects(runAIReview(['list', '--repo', root, '--url', url]), /本地 HTTP/);
   }
-  await assert.rejects(runAIReview(['list', '--repo', os.tmpdir(), '--url', options.at(-1)]), /不匹配/);
+  await assert.rejects(runAIReview(['list', '--repo', os.tmpdir(), '--url', options.at(-1)]), /无法打开 Git 工作区/);
   for (const args of [[], ['delete', ...options], ['list'], ['reply', ...options, '--comment', 'invalid', '--body', 'text'], ['list', ...options, '--body', 'text'], ['reply', ...options, '--comment', comment.id, '--body', 'text', '--body-file', 'other']]) {
     await assert.rejects(runAIReview(args));
   }
@@ -65,4 +65,18 @@ test('AI CLI refuses redirected service responses', async t => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
   await assert.rejects(runAIReview(['list', '--repo', root, '--url', `http://127.0.0.1:${server.address().port}`]), /fetch failed/);
+});
+
+
+test('AI CLI selects a second project without leaking default comments or writing across projects', async t => {
+  const { root, app, comment, options } = await fixture(t);
+  const other = path.join(root, 'other');
+  execFileSync('git', ['init', '-b', 'main', other], {stdio:'pipe'});
+  const secondOptions = ['--repo', other, '--url', options.at(-1)];
+  const lists = await Promise.all([runAIReview(['list', ...options]), runAIReview(['list', ...secondOptions])]);
+  assert.equal(lists[0][0].id, comment.id);
+  assert.deepEqual(lists[1], []);
+  await assert.rejects(runAIReview(['reply', ...secondOptions, '--comment', comment.id, '--body', 'wrong project']), /不存在/);
+  assert.equal(app.store.list()[0].replies, undefined);
+  assert.equal((await runAIReview(['list', ...options]))[0].id, comment.id);
 });

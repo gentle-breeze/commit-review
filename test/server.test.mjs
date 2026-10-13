@@ -186,19 +186,20 @@ test('optional repository starts idle, validates selection and preserves the sel
   assert.equal(response.status, 200);
   const selected = await response.json();
   assert.equal(selected.repository, await realpath(target));
-  assert.equal(selected.token, info.token);
+  assert.notEqual(selected.token, info.token);
   assert.equal(app.repo.path, selected.repository);
   assert.equal(app.store.jsonPath, selected.jsonPath);
-  assert.deepEqual(await (await request('/api/info')).json(), selected);
+  assert.deepEqual(await (await request('/api/info')).json(), info);
   assert.deepEqual(await (await request('/api/comments')).json(), []);
   assert.equal((await request('/api/branches')).status, 200);
   assert.equal((await request('/api/commits')).status, 200);
   assert.equal((await request('/api/repository', 'POST', { repository: path.join(target, '.') })).status, 200);
   const other = await repository('other');
   const rejected = await request('/api/repository', 'POST', { repository: other });
-  assert.equal(rejected.status, 400);
-  assert.match((await rejected.json()).error, /重启服务/);
-  assert.deepEqual(await (await request('/api/info')).json(), selected);
+  assert.equal(rejected.status, 200);
+  assert.notEqual((await rejected.json()).projectId, selected.projectId);
+  assert.equal((await request('/api/comments')).status, 403);
+  assert.deepEqual(await (await request('/api/info')).json(), info);
   await assert.rejects(createApp({ repoPath: target, dataDir }), /已被占用/);
   await app.release();
   const reopened = await createApp({ repoPath: target, dataDir });
@@ -220,15 +221,55 @@ test('repository selection serializes concurrent requests and retries after a lo
   const responses = await Promise.all(Array.from({ length: 3 }, () => request('/api/repository', 'POST', { repository: target })));
   assert.deepEqual(responses.map(response => response.status), [200, 200, 200]);
   const other = await repository('other');
-  assert.equal((await request('/api/repository', 'POST', { repository: other })).status, 400);
+  assert.equal((await request('/api/repository', 'POST', { repository: other })).status, 200);
 });
 
-test('concurrent different project selections bind exactly one repository', async t => {
+test('concurrent different project selections maintain independent sessions', async t => {
   const { dataDir, app, request, repository } = await pickerFixture(t);
   const targets = await Promise.all(['first', 'second'].map(repository));
   const responses = await Promise.all(targets.map(target => request('/api/repository', 'POST', { repository: target })));
-  assert.deepEqual(responses.map(response => response.status).sort(), [200, 400]);
-  const unselected = targets.find(target => path.basename(app.repo.path) !== path.basename(target));
-  const other = await createApp({ repoPath: unselected, dataDir });
-  await other.release();
+  assert.deepEqual(responses.map(response => response.status), [200, 200]);
+  assert.equal(app.repo, undefined);
+  for (const target of targets) await assert.rejects(createApp({ repoPath: target, dataDir }), /已被占用/);
+  await app.release();
+  for (const target of targets) { const reopened = await createApp({ repoPath: target, dataDir }); await reopened.release(); }
+});
+
+test('project tokens, comments, caches and legacy default stay isolated', async t => {
+  const { root, sha, info: first, request, dataDir } = await fixture(t);
+  const secondPath = path.join(root, 'second');
+  execFileSync('git', ['clone', '--no-hardlinks', root, secondPath], { stdio: 'pipe' });
+  const second = await (await request('/api/repository', 'POST', { repository: secondPath })).json();
+  assert.notEqual(first.projectId, second.projectId);
+  assert.notEqual(first.jsonPath, second.jsonPath);
+  const scoped = (project, route, method = 'GET', body) => request(route, method, body, { 'X-Review-Project': project.projectId, 'X-Review-Token': project.token });
+  for (const route of ['/api/comments', `/api/diff?sha=${sha}`, '/api/branches']) {
+    assert.equal((await scoped({ ...second, token: first.token }, route)).status, 403);
+    assert.equal((await scoped({ ...first, projectId: '0'.repeat(20) }, route)).status, 403);
+  }
+  const diffs = await Promise.all([first, second].map(async project => (await scoped(project, `/api/diff?sha=${sha}`)).json()));
+  const comments = await Promise.all([first, second].map(async (project, i) => {
+    const response = await scoped(project, '/api/comments', 'POST', { sha, anchor: { fileId: diffs[i].files[0].id, side: 'new', startLine: 1, endLine: 1 }, body: `project ${i}` });
+    assert.equal(response.status, 201); return response.json();
+  }));
+  for (let i = 0; i < 2; i++) {
+    const project = [first, second][i], other = comments[1-i];
+    assert.deepEqual((await (await scoped(project, '/api/comments')).json()).map(c => c.body), [`project ${i}`]);
+    for (const [route, method, body] of [[`/api/comments/${other.id}`, 'PATCH', {body:'wrong'}], [`/api/comments/${other.id}`, 'DELETE'], [`/api/comments/${other.id}/replies`, 'POST', {body:'wrong'}], [`/api/comments/${other.id}/ai`, 'POST', {action:'reply', body:'wrong'}]]) {
+      assert.equal((await scoped(project, route, method, body)).status, 400);
+    }
+  }
+  assert.deepEqual((await (await request('/api/comments')).json()).map(c => c.body), ['project 0'], 'legacy default cannot drift');
+  assert.equal((await (await request('/api/info')).json()).repository, first.repository);
+  const alias = path.join(root, 'alias');
+  const { symlink } = await import('node:fs/promises'); await symlink(secondPath, alias);
+  assert.deepEqual(await (await request('/api/repository', 'POST', {repository:alias})).json(), second);
+  for (const repository of ['relative', '\0', path.join(root, 'missing')]) assert.equal((await request('/api/repository', 'POST', {repository})).status, 400);
+  // The same SHA cached in A must not make an absent Git object readable from B.
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding:'utf8', stdio:'pipe'}).trim();
+  await writeFile(path.join(root, 'only-a.txt'), 'only A\n'); git('add', 'only-a.txt'); git('commit', '-m', 'Only A');
+  const exclusive = git('rev-parse', 'HEAD');
+  assert.equal((await scoped(first, `/api/diff?sha=${exclusive}`)).status, 200);
+  assert.equal((await scoped(second, `/api/diff?sha=${exclusive}`)).status, 400);
+  for (const project of [first, second]) assert.equal(JSON.parse(await readFile(project.jsonPath, 'utf8')).comments.length, 1);
 });

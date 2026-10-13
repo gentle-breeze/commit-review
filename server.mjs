@@ -41,10 +41,12 @@ function numberParam(value, fallback, maximum) {
 }
 
 export async function createApp({ repoPath, projectsDir = path.dirname(directory), dataDir = path.join(directory, '.reviews') } = {}) {
-  let session, released = false, opening = Promise.resolve();
+  const sessions = new Map();
+  let defaultSession, released = false, opening = Promise.resolve();
   const token = randomBytes(32).toString('hex');
-  const info = () => ({
-    repository: session?.repo.path ?? null, token,
+  const info = (session = defaultSession) => ({
+    repository: session?.repo.path ?? null, token: session?.token ?? token,
+    multiRepository: true, projectId: session?.id ?? null,
     jsonPath: session?.store.jsonPath ?? null, markdownPath: session?.store.markdownPath ?? null,
     aiScriptPath: path.join(directory, 'ai-review.mjs'),
   });
@@ -52,11 +54,12 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
     const result = opening.then(async () => {
       if (released) throw new Error('服务正在关闭');
       const repo = await GitRepo.open(input);
-      if (session) {
-        if (session.repo.path !== repo.path) throw new Error('当前服务已绑定其他项目，请重启服务后选择新项目');
-        return info();
-      }
       const key = createHash('sha256').update(repo.path).digest('hex').slice(0, 20);
+      if (sessions.has(key)) {
+        const existing = sessions.get(key);
+        if (existing.repo.path !== repo.path) throw new Error('项目标识冲突');
+        return info(existing);
+      }
       await mkdir(dataDir, { recursive: true, mode: 0o700 });
       const lock = path.join(dataDir, `${key}.lock`);
       try { await mkdir(lock, { mode: 0o700 }); }
@@ -67,19 +70,23 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
       try {
         await writeFile(path.join(lock, 'pid'), String(process.pid));
         const store = await ReviewStore.open(dataDir, repo.path);
-        session = { repo, store, lock };
+        sessions.set(key, { id: key, repo, store, lock, token: randomBytes(32).toString('hex'), cachedDiff: null });
       } catch (error) { await rm(lock, { recursive: true, force: true }); throw error; }
-      return info();
+      return info(sessions.get(key));
     });
     opening = result.catch(() => {});
     return result;
   }
-  if (repoPath !== undefined) await openRepository(repoPath);
-  let cachedDiff;
-  async function getDiff(sha) {
-    if (cachedDiff?.sha === sha) return cachedDiff;
+  if (repoPath !== undefined) {
+    const selected = await openRepository(repoPath);
+    defaultSession = sessions.get(selected.projectId);
+  }
+  // Legacy unscoped requests work only for a fixed default or a single open repository.
+  const legacySession = () => defaultSession || (sessions.size === 1 ? sessions.values().next().value : undefined);
+  async function getDiff(session, sha) {
+    if (session.cachedDiff?.sha === sha) return session.cachedDiff;
     const result = await session.repo.diff(sha);
-    cachedDiff = result;
+    session.cachedDiff = result;
     return result;
   }
   const server = http.createServer(async (req, res) => {
@@ -114,17 +121,24 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
         } catch { return send(404, { error: '编辑器资源不存在，请运行 npm run build' }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/info') return send(200, info());
-      // Require a token even for repository reads: another local origin must not read source code.
+      // Bind project identity and token before reading any repository or comment data.
+      const projectId = req.headers['x-review-project'];
+      if (projectId !== undefined && (typeof projectId !== 'string' || !/^[a-f0-9]{20}$/.test(projectId) || !sessions.has(projectId))) return send(403, { error: '项目会话无效，请重新选择项目' });
+      const management = ['/api/repositories', '/api/repository'].includes(url.pathname);
+      const session = projectId ? sessions.get(projectId) : legacySession();
       const provided = Buffer.from(req.headers['x-review-token'] || '');
-      const expected = Buffer.from(token);
-      if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return send(403, { error: '会话已失效，请刷新页面' });
+      const allowedToken = projectId ? session.token : management ? (defaultSession?.token ?? token) : session?.token;
+      // For old picker clients only, the bootstrap token can address the sole session.
+      const matches = value => { const expected = Buffer.from(value || ''); return provided.length > 0 && provided.length === expected.length && timingSafeEqual(provided, expected); };
+      const bootstrapLegacy = !projectId && !defaultSession && sessions.size <= 1 && matches(token);
+      if (!matches(allowedToken) && !bootstrapLegacy) return send(403, { error: '会话已失效或项目不匹配，请刷新页面' });
       if (req.method === 'GET' && url.pathname === '/api/repositories') return send(200, await discoverProjects(projectsDir));
       if (req.method === 'POST' && url.pathname === '/api/repository') {
         const data = await readJson(req);
-        if (!data || typeof data.repository !== 'string' || !data.repository.trim()) throw new Error('请选择需要 Review 的 Git 项目');
+        if (!data || typeof data.repository !== 'string' || !data.repository.trim() || !path.isAbsolute(data.repository) || data.repository.includes('\0')) throw new Error('请选择需要 Review 的 Git 项目');
         return send(200, await openRepository(data.repository));
       }
-      if (!session && url.pathname.startsWith('/api/')) return send(409, { error: '请先选择需要 Review 的 Git 项目' });
+      if (!session && url.pathname.startsWith('/api/')) return send(409, { error: '请先选择需要 Review 的 Git 项目；多项目请求必须指定项目标识' });
       const { repo, store } = session || {};
       if (req.method === 'GET' && url.pathname === '/api/branches') return send(200, await repo.branches());
       if (req.method === 'GET' && url.pathname === '/api/commits') {
@@ -132,15 +146,15 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
           numberParam(url.searchParams.get('offset'), 0, 1000000),
           numberParam(url.searchParams.get('limit'), 50, 100) || 1));
       }
-      if (req.method === 'GET' && url.pathname === '/api/diff') return send(200, await getDiff(url.searchParams.get('sha')));
+      if (req.method === 'GET' && url.pathname === '/api/diff') return send(200, await getDiff(session, url.searchParams.get('sha')));
       if (req.method === 'GET' && url.pathname === '/api/file') {
-        return send(200, await repo.file(await getDiff(url.searchParams.get('sha')), url.searchParams.get('fileId')));
+        return send(200, await repo.file(await getDiff(session, url.searchParams.get('sha')), url.searchParams.get('fileId')));
       }
       if (req.method === 'GET' && url.pathname === '/api/comments') return send(200, store.list());
       if (req.method === 'POST' && url.pathname === '/api/comments') {
         const data = await readJson(req);
         if (!data || typeof data !== 'object') throw new Error('评论数据无效');
-        const diff = await getDiff(data.sha);
+        const diff = await getDiff(session, data.sha);
         const anchor = validateAnchor(diff, data.anchor || {}, await repo.file(diff, data.anchor?.fileId));
         return send(201, await store.add({ sha: diff.sha, parent: diff.parent, anchor, body: data.body }));
       }
@@ -166,10 +180,13 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
     released = true;
     return releasing ??= (async () => {
       await opening;
-      if (session) await rm(session.lock, { recursive: true, force: true });
+      for (const session of sessions.values()) {
+        await session.store.queue;
+        await rm(session.lock, { recursive: true, force: true });
+      }
     })();
   };
-  return { server, get repo() { return session?.repo; }, get store() { return session?.store; }, release };
+  return { server, get repo() { return legacySession()?.repo; }, get store() { return legacySession()?.store; }, release };
 }
 
 async function main() {

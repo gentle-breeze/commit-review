@@ -16,6 +16,8 @@
     <div id="repository" class="repository" title="当前仓库"></div>
     <button id="focus-diff" hidden type="button" aria-pressed="false" aria-keyshortcuts="f" title="进入或退出专注模式（F）">专注 diff</button>
     <button id="toggle-comments" hidden type="button" aria-expanded="false" aria-controls="comments-pane">显示评论</button>
+    <a class="project-link" href="/?picker=1">切换项目</a>
+    <a class="project-link" href="/?picker=1" target="_blank" rel="noopener">新标签页选项目</a>
     <button id="refresh" type="button">刷新</button>
     <button id="ai-copy" hidden class="primary" type="button">复制 AI 指令</button>
   </header>
@@ -28,7 +30,7 @@
       <label class="field-label" for="project-path">Git 项目</label>
       <select id="project-path" required disabled aria-describedby="project-hint project-error"><option value="">正在加载项目…</option></select>
       <p id="project-hint">正在查找本地 Git 项目…</p>
-      <p>一个服务实例只审查一个项目；更换项目需重启服务。其他目录的项目可通过 --projects-dir 指定，或使用 --repo 直接打开。</p>
+      <p>同一端口可在不同标签页审查不同项目，互不切换。当前标签页切换项目将重新加载页面；也可点顶部「新标签页选项目」。其他目录可通过 --projects-dir 指定，或用 --repo 设置默认项目。</p>
       <p id="project-error" class="form-error" role="alert"></p>
       <button id="open-project" class="primary" type="submit" disabled>打开项目</button>
     </form>

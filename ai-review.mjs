@@ -22,10 +22,11 @@ export async function runAIReview(args) {
   const url = new URL(values.url);
   if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) ||
       url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('--url 必须为本地 HTTP 服务地址（localhost 或 127.0.0.1），不能包含路径、凭证或查询参数');
+  let projectId;
   const request = async (route, token, data) => {
     const response = await fetch(new URL(route, url), {
       method: data === undefined ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
-      headers: { ...(token ? { 'X-Review-Token': token } : {}), ...(data ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { ...(token ? { 'X-Review-Token': token } : {}), ...(projectId ? { 'X-Review-Project': projectId } : {}), ...(data ? { 'Content-Type': 'application/json' } : {}) },
       ...(data ? { body: JSON.stringify(data) } : {}),
     });
     const result = await response.json();
@@ -33,7 +34,9 @@ export async function runAIReview(args) {
     return result;
   };
   const repository = await realpath(values.repo);
-  const info = await request('/api/info');
+  let info = await request('/api/info');
+  if (info.multiRepository) info = await request('/api/repository', info.token, {repository});
+  projectId = info.projectId;
   if (!info.repository || repository !== info.repository) throw new Error('服务当前项目与 --repo 不匹配，请确认服务地址及项目的根目录');
   if (action === 'list') return request('/api/comments', info.token);
   return request(`/api/comments/${values.comment}/ai`, info.token, { action, ...(body !== undefined ? { body } : {}) });

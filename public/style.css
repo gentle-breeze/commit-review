@@ -141,3 +141,5 @@ button:disabled { cursor: default; }
 @media(max-width:1100px){.topbar{flex-wrap:wrap;height:auto;min-height:60px}.project-link{font-size:11px}}
 
 #focus-commit{margin-right:auto;min-width:0;max-width:min(70%,850px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}#focus-actions{align-items:center}#focus-actions>#focus-commit{font-size:13px}#focus-actions>button{flex-shrink:0}#focus-actions>#focus-commit{flex-shrink:1}.commit-preview .detail-meta{margin-bottom:10px;overflow-wrap:anywhere}
+
+#file-options{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);flex-shrink:0;margin-bottom:6px}#file-options label{display:flex;align-items:center;gap:5px;cursor:pointer}#skipped-test-count{font-size:11px}

@@ -1,3 +1,4 @@
+import { isTestFile, visibleFiles, readSkipTestFiles, skipTestFilesKey, focusShortcut } from './review-options.js';
 import { commentRevision, reviewComments, nextReviewComment } from './comment-view.js';
 import { readHiddenCommits, writeHiddenCommits, visibleCommits } from './commit-filter.js';
 import { createComparison } from './editor.js';
@@ -186,7 +187,8 @@ focusCommit.addEventListener('keydown', event => {
   else commitPreview.scrollBy(0, (event.key.endsWith('Down') ? 1 : -1) * (event.key.startsWith('Page') ? 240 : 40));
 });
 let hiddenCommits = new Set(), selectedCommits = new Set(), preferenceRepository = null;
-let showingHidden = false;
+let showingHidden = false, skipTestFiles = false;
+const listedFiles = () => visibleFiles(state.diff?.files || [], skipTestFiles);
 const listedCommits = () => visibleCommits(state.commits, hiddenCommits, showingHidden, $('#commit-search').value);
 function commitEmptyMessage() {
   if (!state.commits.length) return state.historyMessage || '没有未 push 的提交';
@@ -196,7 +198,7 @@ function clearCommitDetail() {
   disposeEditor(); state.generation++; state.diff = null; state.selection = null; state.requestedSha = null;
   updateFocusCommit();
   empty($('#commit-detail'), commitEmptyMessage());
-  $('#files').replaceChildren(); $('#diff').replaceChildren(); renderComments();
+  $('#files').replaceChildren(); $('#diff').replaceChildren(); $('#skipped-test-count').textContent = ''; renderComments();
 }
 function updateCommitActions() {
   const listed = listedCommits();
@@ -307,7 +309,7 @@ async function loadCommits(append = false) {
     else clearCommitDetail();
   } else await reconcileCommit();
 }
-async function loadDiff(sha) {
+async function loadDiff(sha, entry = null) {
   state.requestedSha = sha;
   disposeEditor();
   const generation = ++state.generation;
@@ -324,7 +326,7 @@ async function loadDiff(sha) {
     state.diff = diff;
     updateFocusCommit();
     renderCommits();
-    await renderDiff();
+    await renderDiff(entry);
     renderComments();
   } catch (error) {
     if (generation === state.generation) {
@@ -344,7 +346,8 @@ function disposeEditor() {
   state.fileLoading = false;
   state.versions = null;
 }
-async function renderDiff() {
+async function renderDiff(entry = null) {
+  disposeEditor();
   const diff = state.diff;
   const detail = $('#commit-detail');
   detail.replaceChildren(el('div', 'eyebrow', `COMMIT / ${diff.sha.slice(0, 8)}`), el('h2', '', diff.subject));
@@ -354,20 +357,36 @@ async function renderDiff() {
   $('#files').replaceChildren();
   $('#diff').replaceChildren();
   if (diff.truncated) detail.append(el('div', 'warning', '提交摘要有截断；全文按文件单独加载，最多列出 300 个文件。'));
-  for (const file of diff.files) {
-    const item = button('', () => run(() => loadFile(file.id)), 'file-link');
+  const files = renderFileList();
+  if (files.length) await loadFile(entry === 'previous' ? files.at(-1).id : files[0].id, entry);
+  else {
+    empty($('#diff'), diff.files.length ? '当前提交的文件均被跳过；关闭“跳过 *Test 文件”可查看。' : '此提交没有文件差异');
+    $('#diff').append(button('[ 上一处 · 上一个提交', () => run(() => navigateFile('previous')), 'previous-empty-commit'), button('] 下一处 · 下一个提交', () => run(() => navigateFile('next')), 'next-empty-commit'));
+  }
+}
+function renderFileList() {
+  const files = listedFiles();
+  $('#files').replaceChildren();
+  const skipped = (state.diff?.files.length || 0) - files.length;
+  $('#skipped-test-count').textContent = skipTestFiles ? `已跳过 ${skipped} 个文件` : '';
+  for (const file of files) {
+    const item = button('', () => run(() => loadFile(file.id)), `file-link${state.file?.id === file.id ? ' active' : ''}`);
     item.title = file.path;
     item.append(el('span', 'file-path', file.path));
     item.dataset.file = file.id;
     item.append(el('span', 'added', `+${file.additions}`), el('span', 'deleted', `−${file.deletions}`));
     $('#files').append(item);
   }
-  if (diff.files.length) await loadFile(diff.files[0].id);
-  else {
-    empty($('#diff'), '此提交没有文件差异');
-    $('#diff').append(button('] 下一处 · 下一个提交', () => run(() => navigateFile('next')), 'next-empty-commit'));
-  }
+  return files;
 }
+$('#skip-test-files').addEventListener('change', () => run(async () => {
+  skipTestFiles = $('#skip-test-files').checked;
+  try { localStorage.setItem(skipTestFilesKey(state.info.repository), String(skipTestFiles)); }
+  catch { notice('浏览器偏好不可用；跳过 Test 文件仅在本页有效。'); }
+  if (!state.diff) return;
+  const files = renderFileList();
+  if (!state.file || !files.some(file => file.id === state.file.id)) await renderDiff();
+}));
 function setFontSize(size) {
   state.fontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
   state.editor?.fontSize(state.fontSize);
@@ -391,22 +410,29 @@ document.addEventListener('keydown', event => {
   event.preventDefault(); event.stopPropagation();
   setFontSize(event.key === '0' ? DEFAULT_FONT_SIZE : state.fontSize + (increase ? 1 : -1));
 }, true);
+let composingTargets = new WeakSet();
+document.addEventListener('compositionstart', event => { composingTargets.add(event.target); }, true);
+document.addEventListener('compositionend', event => { composingTargets.delete(event.target); }, true);
+document.addEventListener('focusout', event => { composingTargets.delete(event.target); }, true);
+window.addEventListener('blur', () => { composingTargets = new WeakSet(); });
 document.addEventListener('keydown', event => {
-  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-  const direction = event.code === 'BracketLeft' || event.key === '[' ? 'previous'
-    : event.code === 'BracketRight' || event.key === ']' ? 'next' : null;
-  const toggleFocus = event.code === 'KeyF' || event.key === 'f';
-  if (!direction && !toggleFocus) return;
   const target = event.target;
-  const codeInput = $('#diff').contains(target) && target.matches('.inputarea, .native-edit-context, .ime-text-area');
-  if (document.querySelector('dialog[open]') || !codeInput && (target.isContentEditable || target.closest('input, select, textarea'))) return;
-  if (toggleFocus) {
+  if (!(target instanceof Element)) return;
+  const codeInput = $('#diff').contains(target) && !!target.closest('.monaco-editor') && target.matches('.inputarea, .native-edit-context, .ime-text-area');
+  const control = target.closest('input, select, textarea');
+  const textControl = control && (control.tagName !== 'INPUT' || !['checkbox', 'radio', 'button', 'submit', 'reset', 'range'].includes(control.type));
+  const editing = !!document.querySelector('dialog[open]') || !codeInput && (target.isContentEditable || !!textControl);
+  const composing = composingTargets.has(target);
+  if (focusShortcut(event, {editing, composing})) {
     if (!state.info?.repository) return;
     event.preventDefault(); event.stopPropagation();
     if (!event.repeat) $('#focus-diff').click();
     return;
   }
-  if (!state.file || !state.versions) return;
+  if (editing || composing || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  const direction = event.code === 'BracketLeft' || event.key === '[' ? 'previous'
+    : event.code === 'BracketRight' || event.key === ']' ? 'next' : null;
+  if (!direction || !state.diff || state.fileLoading) return;
   event.preventDefault(); event.stopPropagation();
   run(() => state.editor ? state.editor.navigate(direction) : navigateFile(direction));
 }, true);
@@ -415,26 +441,27 @@ async function navigateFile(direction) {
   if (navigatingDiffBoundary || state.fileLoading || !state.diff) return;
   navigatingDiffBoundary = true;
   try {
-    const files = state.diff.files;
+    const files = listedFiles();
     const index = files.findIndex(file => file.id === state.file?.id);
     const next = files[index + (direction === 'previous' ? -1 : 1)];
     if (next) { notice(''); await loadFile(next.id, direction); return; }
-    if (direction === 'previous') { notice('已到本次提交的第一个文件。'); return; }
-    await navigateNextCommit();
+    await navigateCommit(direction);
   } finally { navigatingDiffBoundary = false; }
 }
-async function navigateNextCommit() {
+async function navigateCommit(direction) {
   const diff = state.diff, generation = state.generation, fileGeneration = state.fileGeneration;
+  const skipTests = skipTestFiles;
   const ref = state.ref, search = $('#commit-search').value, mode = showingHidden;
   const hidden = [...hiddenCommits].join(',');
   let listGeneration = state.listGeneration;
   const valid = () => state.diff === diff && state.generation === generation && state.fileGeneration === fileGeneration &&
-    state.ref === ref && state.listGeneration === listGeneration && $('#commit-search').value === search && showingHidden === mode && [...hiddenCommits].join(',') === hidden;
+    skipTestFiles === skipTests && state.ref === ref && state.listGeneration === listGeneration && $('#commit-search').value === search && showingHidden === mode && [...hiddenCommits].join(',') === hidden;
   while (valid()) {
     const commits = listedCommits(), index = commits.findIndex(commit => commit.sha === diff.sha);
     if (index < 0) { notice('当前提交不在当前可见列表中，请先从提交列表选择起点。'); return; }
-    const next = commits[index + 1];
-    if (next) { notice(''); await loadDiff(next.sha); return; }
+    const next = commits[index + (direction === 'previous' ? -1 : 1)];
+    if (next) { notice(''); await loadDiff(next.sha, direction); return; }
+    if (direction === 'previous') { notice('已到当前排序和筛选下的第一个可见提交。'); return; }
     if (!state.hasMore) { notice('已到当前排序和筛选下的最后一个可见提交。'); return; }
     notice('正在加载后续提交…');
     // Fetch without reconciling the selection; only this request may append its page.
@@ -780,6 +807,7 @@ setInterval(async () => {
 async function openReviewComment(comment) {
   if (!commentVisible(comment)) return;
 
+  if (skipTestFiles && isTestFile(comment.path)) { notice('此评论属于已跳过的 Test 文件；关闭“跳过 *Test 文件”后可定位，评论和回复仍保留。'); return; }
   if (state.diff?.sha !== comment.sha) await loadDiff(comment.sha);
   if (state.diff?.sha !== comment.sha) return;
   const file = state.diff.files.find(file => file.id === comment.fileId);
@@ -1032,7 +1060,7 @@ async function init() {
   const ready = Boolean(state.info.repository);
   $('#project-picker').hidden = ready;
   $('.workspace').hidden = !ready;
-  for (const selector of ['#focus-diff', '#toggle-comments', '#ai-copy']) $(selector).hidden = !ready;
+  for (const selector of ['#focus-diff', '#toggle-comments', '#ai-copy', '#file-options']) $(selector).hidden = !ready;
   if (!ready) {
     $('#repository').textContent = '尚未选择项目';
     $('#repository').title = '从下拉列表选择本地 Git 项目';
@@ -1060,6 +1088,9 @@ async function init() {
   if (preferenceRepository !== state.info.repository) {
     readComments.clear(); activeCommentId = null;
     preferenceRepository = state.info.repository; hiddenCommits = new Set(); selectedCommits.clear(); showingHidden = false;
+    skipTestFiles = false;
+    try { skipTestFiles = readSkipTestFiles(localStorage, preferenceRepository); } catch {}
+    $('#skip-test-files').checked = skipTestFiles;
     try { hiddenCommits = readHiddenCommits(localStorage, preferenceRepository); }
     catch { notice('浏览器隐藏偏好不可用；仍可在本次页面中隐藏提交。'); }
   }

@@ -1,3 +1,4 @@
+import {activeFollowups} from './comment-view.js';
 import {isTestFile} from './review-options.js';
 
 // Walk oldest -> newest. Reusing a deleted path creates a different lineage.
@@ -62,7 +63,7 @@ export function createFileIndexView({getContext,loadPage,openChange,onError}){
       const kind={A:'新增',M:'修改',D:'删除',R:'重命名',C:'复制',T:'类型变化'}[file.status[0]]||file.status;
       card.append(node('strong',`${commit.sha.slice(0,8)} · ${commit.subject}`),node('p',`${commit.author} · ${commit.date}`),node('p',`${kind} ${file.status} · ${file.binary?'二进制（无行数统计）':`+${file.additions} −${file.deletions}`}${file.oldPath!==file.path?` · ${file.oldPath} → ${file.path}`:''}`));
       card.append(button('查看此次 diff',()=>open(event)));
-      const discussion=comments.get(`${commit.sha}:${file.id}`)||[];
+      const discussion=[...new Map([...(comments.get(`${commit.sha}:${file.id}`)||[]),...ctx.comments.filter(c=>activeFollowups(c).some(link=>link.sha===commit.sha&&link.path===file.path))].map(c=>[c.id,c])).values()];
       const details=node('details');details.append(node('summary',`${discussion.length} 条关联评论 · ${discussion.filter(c=>!c.resolved).length} 未解决`));
       for(const comment of discussion)details.append(button(`${comment.resolved?'已解决':'未解决'} · ${comment.body}`,()=>open(event,comment)));
       card.append(details);history.append(card);

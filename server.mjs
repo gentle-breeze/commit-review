@@ -71,7 +71,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
       try {
         await writeFile(path.join(lock, 'pid'), String(process.pid));
         const store = await ReviewStore.open(dataDir, repo.path);
-        sessions.set(key, { id: key, repo, store, lock, token: randomBytes(32).toString('hex'), cachedDiff: null, fileIndex: new FileIndex(repo) });
+        sessions.set(key, { id: key, repo, store, lock, token: randomBytes(32).toString('hex'), cachedDiff: null, associationScopes: new Map(), fileIndex: new FileIndex(repo) });
       } catch (error) { await rm(lock, { recursive: true, force: true }); throw error; }
       return info(sessions.get(key));
     });
@@ -88,6 +88,25 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
     if (session.cachedDiff?.sha === sha && (fileId === undefined ? session.cachedDiff.focusedFileId === undefined : session.cachedDiff.files.some(file => file.id === fileId))) return session.cachedDiff;
     const result = await session.repo.diff(sha, fileId);
     session.cachedDiff = result;
+    return result;
+  }
+  const scopeKey = scope => JSON.stringify([scope.status,scope.head,scope.base,scope.comparisonRef]);
+  async function associationScope(session, {ref, id}) {
+    if(id!==undefined&&id!==null){
+      if(!/^[a-f0-9]{64}$/.test(id))throw new Error('审查范围标识无效');
+      const saved=session.associationScopes.get(id);
+      if(!saved)throw new Error('审查范围已失效，请从当前页面重新复制AI指令或打开修改关联');
+      if(scopeKey(await session.repo.reviewScope(saved.ref))!==saved.scopeKey)throw new Error('审查范围已变化，请刷新页面后重新选择关联');
+      return saved;
+    }
+    const scope=await session.repo.reviewScope(ref), commits=[];
+    let page;
+    do {page=await session.repo.commitPage(scope,commits.length,100);commits.push(...page.commits);} while(page.hasMore);
+    if(scopeKey(await session.repo.reviewScope(ref))!==scopeKey(scope))throw new Error('审查范围已变化，请刷新后重试');
+    const key=scopeKey(scope), token=createHash('sha256').update(JSON.stringify([session.id,ref,key])).digest('hex');
+    const result={id:token,ref,scopeKey:key,commits};
+    session.associationScopes.set(token,result);
+    if(session.associationScopes.size>32)session.associationScopes.delete(session.associationScopes.keys().next().value);
     return result;
   }
   const server = http.createServer(async (req, res) => {
@@ -160,6 +179,15 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
         const anchor = validateAnchor(diff, data.anchor || {}, await repo.file(diff, data.anchor?.fileId));
         return send(201, await store.add({ sha: diff.sha, parent: diff.parent, anchor, body: data.body }));
       }
+      if(req.method==='GET'&&url.pathname==='/api/association-scope')return send(200,await associationScope(session,{ref:url.searchParams.get('ref')||'HEAD',id:url.searchParams.get('id')}));
+      const associationMatch=/^\/api\/comments\/([a-f0-9-]{36})\/associations(\/ai)?$/.exec(url.pathname);
+      if(associationMatch&&req.method==='POST'){
+        const data=await readJson(req),source=associationMatch[2]?'ai':'user';
+        if(!data||Array.isArray(data)||Object.keys(data).some(key=>!['scope','shas','revision','requestId',...(source==='ai'?['evidence']:[])].includes(key))||typeof data.scope!=='string'||!/^[a-f0-9]{64}$/.test(data.scope)||!Array.isArray(data.shas)||data.shas.length>100||data.shas.some(sha=>typeof sha!=='string'))throw new Error('关联选择无效');
+        const snapshot=await associationScope(session,{id:data.scope}), bySha=new Map(snapshot.commits.map(c=>[c.sha,c]));
+        if(data.shas.some(sha=>!bySha.has(sha)))throw new Error('只能选择当前项目本次审查范围中的提交');
+        return send(200,await store.replaceAssociations(associationMatch[1],{...data,source,targets:[...new Set(data.shas)].map(sha=>({sha,subject:bySha.get(sha).subject,kind:'commit'}))}));
+      }
       const latestMatch=/^\/api\/comments\/([a-f0-9-]{36})\/latest$/.exec(url.pathname);
       if(latestMatch&&req.method==='POST'){
         const comment=store.list().find(item=>item.id===latestMatch[1]);if(!comment)throw new Error('评论不存在');
@@ -173,19 +201,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
         if(!comment)throw new Error('评论不存在');
         if(req.method==='GET' && linkMatch[2]==='target' && !linkMatch[3]) return send(200,await repo.commentTarget(comment,url.searchParams.get('ref')||'HEAD',url.searchParams.get('path')||undefined));
         if(req.method==='POST' && linkMatch[2]==='links') {
-          const data=await readJson(req),source=linkMatch[3]?'ai':'user';
-          const allowed=source==='ai'?['requestId','revision','sha','path','startLine','endLine','evidence']:['requestId','revision','removeId','confirmId','sha','path','startLine','endLine'];
-          if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).some(key=>!allowed.includes(key)))throw new Error('关联字段无效');
-          if(data.removeId||data.confirmId) {
-            if(data.removeId&&data.confirmId || Object.keys(data).some(key=>!['requestId','revision',data.removeId?'removeId':'confirmId'].includes(key)))throw new Error('移除关联不能附带目标');
-            return send(200,await store.link(comment.id,{requestId:data.requestId,revision:data.revision,...(data.removeId?{removeId:data.removeId}:{confirmId:data.confirmId})}));
-          }
-          if(!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(data.sha||''))throw new Error('请先预览并确认完整目标 SHA');
-          const target=await repo.commentTarget(comment,data.sha,data.path);
-          if(target.unavailable)throw new Error(target.unavailable);
-          if(!Number.isInteger(data.startLine)||!Number.isInteger(data.endLine)||data.startLine<1||data.endLine<data.startLine||data.endLine>target.lineCount||data.endLine-data.startLine>=200)throw new Error('目标选区必须为文件内的1–200行');
-          const code=target.text.split('\n').slice(data.startLine-1,data.endLine).join('\n');
-          return send(200,await store.link(comment.id,{requestId:data.requestId,revision:data.revision,source,evidence:data.evidence,target:{sha:target.sha,path:target.path,startLine:data.startLine,endLine:data.endLine,code}}));
+          throw new Error('关联接口已简化，请刷新页面，使用当前审查范围多选替换关联');
         }
       }
       const replyEditMatch = /^\/api\/comments\/([a-f0-9-]{36})\/replies\/([a-f0-9-]{36})(\/restore)?$/.exec(url.pathname);

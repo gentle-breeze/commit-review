@@ -34,7 +34,8 @@ test('amend/rebase/squash/split/rename retain original evidence and support expl
   const {app,request}=await service(t,f);
   let response=await request('/api/comments',{sha:original,anchor:{fileId:'0',side:'new',startLine:1,endLine:1},body:'Does bug handling remain?'});assert.equal(response.status,201);let c=response.data;const evidence={sha:c.sha,path:c.path,code:c.code,side:c.side};
   const preview=async(ref='HEAD',name='')=>{const r=await request(`/api/comments/${c.id}/target?${new URLSearchParams({ref,path:name})}`);assert.equal(r.status,200);return r.data;};
-  const add=async(p,startLine=p.candidates[0].startLine)=>{const r=await request(`/api/comments/${c.id}/links`,{requestId:randomUUID(),revision:c.linkRevision||0,sha:p.sha,path:p.path,startLine,endLine:startLine});assert.equal(r.status,200,JSON.stringify(r.data));c=r.data;assert.equal(c.resolved,false);};
+  // Seed legacy code-level records directly to verify existing data survives the new UI/API.
+  const add=async(p,startLine=p.candidates[0].startLine)=>{c=await app.store.link(c.id,{requestId:randomUUID(),revision:c.linkRevision||0,target:{sha:p.sha,path:p.path,startLine,endLine:startLine,code:p.text.split('\n')[startLine-1]}});assert.equal(c.resolved,false);};
   await put('a.txt','prefix\n'+content);git('add','.');git('commit','--amend','-m','Amended');
   let p=await preview();assert.notEqual(p.sha,original);assert.equal(p.candidates.length,2);assert.ok(p.candidates.every(x=>x.basis==='exact-text'));await add(p);const amended=p.sha;
   git('checkout','main');await put('base.txt','new base\n');commit('Base advances');git('checkout','feature');git('rebase','main');p=await preview();assert.notEqual(p.sha,amended);await add(p);
@@ -50,25 +51,25 @@ test('amend/rebase/squash/split/rename retain original evidence and support expl
   p=await preview('HEAD','renamed.txt');assert.equal(p.path,'renamed.txt');assert.equal(c.code,evidence.code,'original quote survives garbage collection');
   const body=toMarkdown(app.store.data);assert.match(body,/待对照复核/);assert.ok(body.includes(original)&&body.includes(p.sha));assert.match(body,/不能仅凭 SHA 或文本变化/);
 });
-test('link operations are idempotent, conflict checked, project scoped and never alter resolution',async t=>{
+test('association replacement is atomic, idempotent, project scoped and preserves legacy history',async t=>{
   const f=await fixture(t);await f.put('a.txt','old\n');const sha=f.commit('Original');const {app,request,headers}=await service(t,f);
   let c=(await request('/api/comments',{sha,anchor:{fileId:'0',side:'new',startLine:1,endLine:1},body:'Original'})).data;
-  await f.put('a.txt','new\n');const target=f.commit('Next');const route=`/api/comments/${c.id}/links`;
-  const body={requestId:randomUUID(),revision:0,sha:target,path:'a.txt',startLine:1,endLine:1};
-  const duplicate=await Promise.all([request(route,body),request(route,body)]);assert.deepEqual(duplicate.map(r=>r.status),[200,200]);c=duplicate[1].data;assert.equal(c.followups.length,1);assert.equal(c.followups[0].code,'new');assert.equal(c.linkRevision,1);
-  assert.equal((await request(route,{...body,path:'missing'})).status,400);
-  assert.equal((await request(route,{...body,sha})).status,400,'idempotency key cannot carry different evidence');
-  assert.equal((await request(route,{...body,requestId:randomUUID()})).status,400,'stale revision rejected');
-  assert.equal((await request(route,{...body,revision:1,requestId:randomUUID(),resolved:true})).status,400,'cannot smuggle close or evidence');
-  assert.equal((await request(route,{...body,revision:1,requestId:randomUUID(),endLine:99})).status,400);
-  const operations=await Promise.all([request(route,{revision:1,requestId:randomUUID(),removeId:c.followups[0].id}),request(route,{...body,revision:1,requestId:randomUUID()})]);assert.equal(operations.filter(r=>r.status===200).length,1);
-  c=app.store.list()[0];assert.equal(c.resolved,false);assert.equal(c.sha,sha);assert.equal(c.code,'old');assert.equal(c.followups.length,1);
+  c=await app.store.link(c.id,{revision:0,requestId:randomUUID(),target:{sha,path:'a.txt',startLine:1,endLine:1,code:'old'}});
+  await app.store.update(c.id,{resolved:true});
+  await f.put('a.txt','new\n');const target=f.commit('Next'),route=`/api/comments/${c.id}/associations`;
+  const scope=(await request('/api/association-scope?ref=HEAD')).data.id;
+  const body={scope,requestId:randomUUID(),revision:1,shas:[target]};
+  const duplicate=await Promise.all([request(route,body),request(route,body)]);assert.deepEqual(duplicate.map(r=>r.status),[200,200]);c=duplicate[1].data;
+  assert.equal(c.followups.length,2);assert.equal(c.followups[0].code,'old');assert.ok(c.followups[0].removedAt);assert.equal(c.followups[1].kind,'commit');assert.equal(c.linkRevision,2);assert.equal(c.resolved,true);
+  for(const patch of [{shas:[sha]},{revision:0},{resolved:false},{shas:[f.git('rev-parse','main')]}])assert.equal((await request(route,{...body,requestId:randomUUID(),...patch})).status,400);
+  assert.equal((await request(`/api/comments/${c.id}/links`,{revision:2,requestId:randomUUID(),sha:target,path:'a.txt',startLine:1,endLine:1})).status,400,'legacy endpoint cannot bypass scope');
+  const operations=await Promise.all([request(route,{...body,revision:2,requestId:randomUUID(),shas:[]}),request(route,{...body,revision:2,requestId:randomUUID(),shas:[sha,target]})]);assert.equal(operations.filter(r=>r.status===200).length,1);
+  c=app.store.list()[0];assert.equal(c.resolved,true);assert.equal(c.sha,sha);assert.equal(c.code,'old');assert.equal(c.followups[0].code,'old');
   const other=path.join(f.root,'other');await mkdir(other);execFileSync('git',['-C',other,'init','-b','main'],{stdio:'pipe'});
-  const info=(await request('/api/repository',{repository:other})).data;
-  const cross={...headers,'X-Review-Token':info.token,'X-Review-Project':info.projectId};
+  const info=(await request('/api/repository',{repository:other})).data,cross={...headers,'X-Review-Token':info.token,'X-Review-Project':info.projectId};
   assert.equal((await request(route,body,cross)).status,400);assert.equal((await request('/api/comments',undefined,cross)).data.length,0);
   assert.equal((await request(route,body,{...headers,'X-Review-Project':info.projectId})).status,403);
-  const reopened=await ReviewStore.open(path.join(f.root,'data'),app.repo.path);assert.deepEqual(reopened.list()[0],c,'additive version 1 fields persist and reload');
+  const reopened=await ReviewStore.open(path.join(f.root,'data'),app.repo.path);assert.deepEqual(reopened.list()[0],c);
 });
 
 test('old-side rename uses original path and unsupported targets stay explicit',async t=>{

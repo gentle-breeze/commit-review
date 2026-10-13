@@ -100,16 +100,12 @@
     </form>
   </dialog>
   <dialog id="followup-dialog" aria-labelledby="followup-title">
-    <div class="dialog-heading"><h2 id="followup-title">关联后续提交 / 对照复核</h2><button id="followup-close" type="button">关闭</button></div>
-    <p>保留原始依据，AI可先建立有依据的初步关联，用户可确认、补充或解除。关联、代码变化或文本匹配均不代表问题已解决；请追加回复说明目标 SHA、代码依据和验证结果，由人关闭评论。</p>
-    <details open><summary>原始评论及保存的代码片段</summary><pre id="followup-original"></pre></details>
-    <div id="followup-links"></div>
-    <label>目标提交 / 分支<input id="followup-ref" value="HEAD"></label>
-    <label>目标相对路径（留空尝试原路径及 Git 重命名线索）<input id="followup-path"></label>
-    <button id="followup-preview" type="button">预览候选位置</button><p id="followup-error" role="status"></p>
-    <div id="followup-candidates"></div><p id="followup-target-sha"></p>
-    <label>起始行<input id="followup-start" type="number" min="1" value="1"></label><label>结束行<input id="followup-end" type="number" min="1" value="1"></label>
-    <pre id="followup-target"></pre><button id="followup-save" type="button" disabled>确认添加关联（不关闭评论）</button>
+    <div class="dialog-heading"><h2 id="followup-title">修改关联</h2><button id="followup-close" type="button">取消</button></div>
+    <p>选择当前审查范围中的一个或多个提交。保存后替换当前关联，旧记录保留。关联不代表问题已解决。</p>
+    <p id="followup-error" role="status"></p><div id="followup-options"></div>
+    <details><summary>关联记录</summary><div id="followup-links"></div></details>
+    <details><summary>原始评论及代码片段</summary><pre id="followup-original"></pre></details>
+    <button id="followup-save" type="button" disabled>保存</button>
   </dialog>
   <dialog id="reply-dialog">
     <form id="reply-form">

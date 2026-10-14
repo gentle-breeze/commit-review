@@ -54,6 +54,8 @@ try {
   }
   const t=await tab(),{cdp,evaluate,wait}=t;
   await cdp('Page.navigate',{url:base});await wait('document.querySelectorAll("#commits .commit").length===50 && document.querySelector(".monaco-editor")');
+  assert.equal(await evaluate('document.querySelector("#skip-test-files").checked'),true);
+  await evaluate('document.querySelector("#skip-test-files").click()');
   const info=await(await fetch(base+'/api/info')).json();
   const response=await fetch(base+'/api/comments',{method:'POST',headers:{'Content-Type':'application/json','X-Review-Token':info.token,'X-Review-Project':info.projectId},body:JSON.stringify({sha:original,anchor:{fileId:'0',side:'new',startLine:1,endLine:1},body:'Original discussion'})});assert.equal(response.status,201);
   const open=async()=>{await evaluate('document.querySelector("#open-file-index").click()');await wait('document.querySelector("#index-progress").textContent.includes("索引完成")');};

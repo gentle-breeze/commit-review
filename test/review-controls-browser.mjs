@@ -53,6 +53,12 @@ try {
   const t=await tab(), other=await tab();const {cdp,evaluate,wait}=t;
   await cdp('Page.bringToFront');await cdp('Page.navigate',{url:base});
   await wait('document.querySelector(".change-count")?.textContent==="1 处变更"');
+  assert.equal(await evaluate('document.querySelector("#skip-test-files").checked'),true,'first use defaults on');
+  assert.equal(await evaluate('document.querySelectorAll("#files .file-link").length'),2);
+  await evaluate('document.querySelector("#skip-test-files").click()');await wait('document.querySelectorAll("#files .file-link").length===4');
+  await cdp('Page.reload');await wait('document.querySelector(".current-change")?.textContent==="当前 1 / 1"');
+  assert.equal(await evaluate('document.querySelector("#skip-test-files").checked'),false,'explicit off survives reload');
+  assert.equal(await evaluate('document.querySelectorAll("#files .file-link").length'),4);
   const focused=()=>evaluate('document.querySelector(".workspace").classList.contains("focus-diff")');
   const eventF=options=>evaluate(`(()=>{const e=new KeyboardEvent('keydown',{bubbles:true,cancelable:true,code:'KeyF',key:'f',...${JSON.stringify(options)}});document.activeElement.dispatchEvent(e);return e.defaultPrevented;})()`);
   await evaluate('document.body.tabIndex=-1;document.body.focus()');
@@ -112,7 +118,7 @@ try {
   await evaluate(`window.originalFetch=window.fetch;window.held=false;window.fetch=async(url,options)=>{if(url.startsWith('/api/diff?')){window.held=true;await new Promise(resolve=>window.releaseHeld=resolve);}return window.originalFetch(url,options);};const b=Array.from(document.querySelectorAll('#diff button')).find(n=>n.textContent.includes('上一处'));for(let i=0;i<6;i++)b.click()`);
   await wait('window.held');await evaluate('window.fetch=window.originalFetch');await choose('Newest');await evaluate('window.releaseHeld()');await delay(200);assert.equal(await evaluate('document.querySelector("#commit-detail h2").textContent'),'Newest');
   await cdp('Page.reload');await wait('document.querySelector("#skip-test-files")?.checked && document.querySelectorAll("#files .file-link").length===2');
-  await other.cdp('Page.navigate',{url:base+'/?repo='+encodeURIComponent(b)});await other.wait('document.querySelectorAll("#files .file-link").length===4');assert.equal(await other.evaluate('document.querySelector("#skip-test-files").checked'),false);
+  await other.cdp('Page.navigate',{url:base+'/?repo='+encodeURIComponent(b)});await other.wait('document.querySelectorAll("#files .file-link").length===2');assert.equal(await other.evaluate('document.querySelector("#skip-test-files").checked'),true,'another unset project defaults on');await other.evaluate('document.querySelector("#skip-test-files").click()');await other.wait('document.querySelectorAll("#files .file-link").length===4');await other.cdp('Page.reload');await other.wait('!document.querySelector("#skip-test-files").checked && document.querySelectorAll("#files .file-link").length===4');
   await evaluate('document.querySelector("#focus-diff").click()');assert.equal(await evaluate('document.querySelector("#file-options").hidden'),false,'switch is available in focus mode');
   await writeFile('/tmp/commit-review-controls.png',Buffer.from((await cdp('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await evaluate('document.querySelector("#skip-test-files").click()');await wait('document.querySelectorAll("#files .file-link").length===4');
@@ -121,6 +127,17 @@ try {
   await evaluate('document.querySelector("#skip-test-files").click()');await wait('document.querySelectorAll("#files .file-link").length===2');
   await cdp('Page.navigate',{url:base+'/?repo='+encodeURIComponent(b)});await wait('document.querySelectorAll("#files .file-link").length===4');assert.equal(await evaluate('document.querySelector("#skip-test-files").checked'),false);
   await cdp('Page.navigate',{url:base+'/?repo='+encodeURIComponent(a)});await wait('document.querySelectorAll("#files .file-link").length===2');assert.equal(await evaluate('document.querySelector("#skip-test-files").checked'),true);
+  // Default/retained enabled preference also applies to binary next-file and forward commit boundaries.
+  await writeFile(path.join(a,'A.bin'),Buffer.from([0,1,2]));await writeFile(path.join(a,'BTest.java'),'test\n');await writeFile(path.join(a,'C.js'),'normal\n');git(a,'add','.');git(a,'commit','-m','Binary navigation');
+  await cdp('Page.reload');await wait('document.querySelector(".file-title")?.textContent.includes("A.bin")');
+  assert.equal(await evaluate('document.querySelector("#skip-test-files").checked'),true);
+  await evaluate('Array.from(document.querySelectorAll("#diff button")).find(n=>n.textContent.includes("下一个文件")).click()');await wait('document.querySelector(".file-title")?.textContent.includes("C.js") && document.querySelector(".current-change")?.textContent==="当前 1 / 1"');
+  await writeFile(path.join(a,'DTest.java'),'only test\n');git(a,'add','.');git(a,'commit','-m','Forward only Test');await writeFile(path.join(a,'E.js'),'next normal\n');git(a,'add','.');git(a,'commit','-m','Forward normal');
+  await cdp('Page.reload');await wait('document.querySelector(".file-title")?.textContent.includes("E.js") && document.querySelector(".current-change")?.textContent==="当前 1 / 1"');
+  await evaluate('Array.from(document.querySelectorAll("#commits .commit")).find(n=>n.querySelector(".commit-subject").textContent==="Binary navigation").click()');await wait('document.querySelector(".file-title")?.textContent.includes("A.bin")');
+  await evaluate('Array.from(document.querySelectorAll("#diff button")).find(n=>n.textContent.includes("下一个文件")).click()');await wait('document.querySelector(".file-title")?.textContent.includes("C.js") && document.querySelector(".current-change")?.textContent==="当前 1 / 1"');
+  await move('next');await wait('document.querySelector("#commit-detail h2")?.textContent==="Forward only Test" && document.querySelector(".next-empty-commit")');assert.equal(await evaluate('document.querySelectorAll("#files .file-link").length'),0);
+  await evaluate('document.querySelector(".next-empty-commit").click()');await wait('document.querySelector(".file-title")?.textContent.includes("E.js")');
   for(const page of [t,other])assert.deepEqual(page.errors,[]);
   console.log('Review controls browser passed: reverse commit/file/diff navigation, hidden/search/empty boundaries, rapid switching, Test filtering and project persistence, physical F, editing exclusions, tracked and CDP composition. OS Chinese candidate UI was not driven.');
 } finally {

@@ -195,7 +195,7 @@ focusCommit.addEventListener('keydown', event => {
   else commitPreview.scrollBy(0, (event.key.endsWith('Down') ? 1 : -1) * (event.key.startsWith('Page') ? 240 : 40));
 });
 let hiddenCommits = new Set(), selectedCommits = new Set(), preferenceRepository = null;
-let showingHidden = false, skipTestFiles = false;
+let showingHidden = false, skipTestFiles = true;
 const listedFiles = () => visibleFiles(state.diff?.files || [], skipTestFiles);
 const listedCommits = () => visibleCommits(state.commits, hiddenCommits, showingHidden, $('#commit-search').value);
 function commitEmptyMessage() {
@@ -1137,7 +1137,7 @@ async function init() {
   if (preferenceRepository !== state.info.repository) {
     readComments.clear(); activeCommentId = null;
     preferenceRepository = state.info.repository; hiddenCommits = new Set(); selectedCommits.clear(); showingHidden = false;
-    skipTestFiles = false;
+    skipTestFiles = true;
     try { skipTestFiles = readSkipTestFiles(localStorage, preferenceRepository); } catch {}
     $('#skip-test-files').checked = skipTestFiles;
     try { hiddenCommits = readHiddenCommits(localStorage, preferenceRepository); }

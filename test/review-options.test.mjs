@@ -9,13 +9,18 @@ test('Test filtering matches only a case-sensitive basename stem suffix',()=>{
   assert.deepEqual(visibleFiles(files,false),files);
   assert.equal(files.length,3);
 });
-test('skip Test preference defaults off and isolates canonical project keys',()=>{
+test('skip Test preference defaults on and preserves explicit project opt-outs',()=>{
   const storage=new Map();storage.getItem=storage.get.bind(storage);
-  assert.equal(readSkipTestFiles(storage,'/A'),false);
+  assert.equal(readSkipTestFiles(storage,'/A'),true);
   storage.set(skipTestFilesKey('/A'),'true');
   assert.equal(readSkipTestFiles(storage,'/A'),true);
-  assert.equal(readSkipTestFiles(storage,'/B'),false);
-  storage.set(skipTestFilesKey('/A'),'invalid');assert.equal(readSkipTestFiles(storage,'/A'),false);
+  assert.equal(readSkipTestFiles(storage,'/B'),true);
+  storage.set(skipTestFilesKey('/A'),'false');
+  assert.equal(readSkipTestFiles(storage,'/A'),false);
+  assert.equal(readSkipTestFiles(storage,'/B'),true);
+  assert.equal(storage.get(skipTestFilesKey('/A')),'false','reading does not overwrite explicit choice');
+  storage.set(skipTestFilesKey('/A'),'invalid');assert.equal(readSkipTestFiles(storage,'/A'),true);
+  storage.getItem=()=>null;assert.equal(readSkipTestFiles(storage,'/A'),true);
 });
 test('physical F accepts idle IME 229 only outside editing and actual composition',()=>{
   for(const key of ['f','F','Process','ｆ'])assert.equal(focusShortcut({key,code:'KeyF',keyCode:229}),true);

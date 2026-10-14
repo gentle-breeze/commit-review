@@ -10,7 +10,8 @@ export function visibleFiles(files, skipTests) {
   return skipTests ? files.filter(file => !isTestFile(file.path)) : files;
 }
 export function readSkipTestFiles(storage, repository) {
-  return storage.getItem(skipTestFilesKey(repository)) === 'true';
+  // Only an explicit opt-out disables filtering; missing/invalid values use the default.
+  return storage.getItem(skipTestFilesKey(repository)) !== 'false';
 }
 export function focusShortcut(event, { editing = false, composing = false } = {}) {
   if (editing || composing || event.isComposing || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;

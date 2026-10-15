@@ -2,7 +2,7 @@ export function createFollowupView({getContext,getScope,api,reload,onSelect}) {
   const $=s=>document.querySelector(s),dialog=$('#followup-dialog');
   let generation=0,controller,busy=false,context,comment,snapshot,request;
   const node=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
-  const valid=mine=>mine===generation&&dialog.open&&getContext().session===context.session&&getContext().ref===context.ref&&getContext().scope===context.scope;
+  const valid=mine=>mine===generation&&dialog.open&&getContext().session===context.session&&getContext().ref===context.ref&&getContext().scope===context.scope&&getContext().rangeId===context.rangeId;
   function setBusy(value){busy=value;for(const n of dialog.querySelectorAll('input,button'))n.disabled=value;$('#followup-save').disabled=value||!snapshot;}
   dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
   document.addEventListener('keydown',e=>{if(busy&&dialog.open&&e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();}},true);
@@ -24,13 +24,15 @@ export function createFollowupView({getContext,getScope,api,reload,onSelect}) {
   return {async open(value){
     controller?.abort();const mine=++generation;controller=new AbortController();context=getContext();comment=value;snapshot=null;request=null;
     onSelect(comment);
-    $('#followup-original').textContent=`原始 ${comment.sha} · ${comment.path}\n${comment.body}\n\n${comment.code}`;
+    const originalPath=comment.oldPath&&comment.oldPath!==comment.path?`${comment.oldPath} → ${comment.path}`:comment.path;
+    const originalLocation=comment.kind==='file'?'整个文件':`${comment.side==='old'?'旧版本':'新版本'} · 第 ${comment.startLine}–${comment.endLine} 行`;
+    $('#followup-original').textContent=`原始 ${comment.sha} · ${originalPath} · ${originalLocation}\n${comment.body}${comment.code?'\n\n'+comment.code:''}`;
     $('#followup-options').replaceChildren();$('#followup-error').textContent='正在读取完整审查范围…';
     const history=$('#followup-links');history.replaceChildren();
     for(const link of comment.followups||[]){
       const row=node('p',`${link.removedAt?'历史关联':'当前关联'} · ${link.sha.slice(0,8)} · ${link.createdBy==='ai'?'AI':'用户'} · ${link.createdAt}${link.removedAt?' · 替换于 '+link.removedAt:''}${link.subject?' · '+link.subject:''}`);
       if(link.evidence)row.append(node('span',' · 依据：'+link.evidence));
-      if(link.path)row.append(node('span',` · ${link.path}:${link.startLine}–${link.endLine}`));
+      if(link.path)row.append(node('span',` · ${link.oldPath&&link.oldPath!==link.path?link.oldPath+' → ':''}${link.path}${link.kind==='file'?' · 整个文件':link.startLine===undefined?'':`:${link.startLine}–${link.endLine}`}`));
       if(link.code){const quote=node('pre',link.code);row.append(quote);}
       row.dataset.sha=link.sha;history.append(row);
     }

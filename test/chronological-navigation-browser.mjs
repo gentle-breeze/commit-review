@@ -57,8 +57,23 @@ try {
   await move('previous');await wait('document.querySelector("#commit-detail h2")?.textContent==="Middle target" && document.querySelector(".current-change")?.textContent==="当前 1 / 1"');await move('previous');await wait('document.querySelector("#commit-detail h2")?.textContent==="Early target" && document.querySelector(".current-change")?.textContent==="当前 1 / 1"');
   await cdp('Page.reload');await wait('document.querySelector(".current-change")?.textContent==="当前 1 / 1" && document.querySelectorAll("#commits .commit").length===50');
   await evaluate(`window.savedFetch=window.fetch;window.held=false;window.fetch=async(url,opts)=>{if(String(url).includes('/api/commits?')){window.held=true;await new Promise(r=>window.release=r);}return window.savedFetch(url,opts)};const b=Array.from(document.querySelectorAll('#diff button')).find(b=>b.textContent.includes('下一处'));b.click();b.click()`);await wait('window.held');await evaluate('document.querySelector("#skip-test-files").click();window.fetch=window.savedFetch;window.release()');await delay(200);assert.equal(await evaluate('document.querySelector("#commit-detail h2").textContent'),'Early target');assert.equal(await evaluate('document.querySelectorAll("#commits .commit").length'),50,'changed filter invalidates pending page');
-  await evaluate(`window.held=false;window.fetch=async(url,opts)=>{if(String(url).includes('/api/commits?')){window.held=true;await new Promise(r=>window.release=r);}return window.savedFetch(url,opts)}`);await move('next');await wait('window.held');commit('Range changed','2020-01-04T00:00:00Z');await evaluate('window.fetch=window.savedFetch;window.release()');await wait('document.querySelector("#notice").textContent.includes("审查范围已变化")');assert.equal(await evaluate('document.querySelectorAll("#commits .commit").length'),50);assert.equal(await evaluate('document.querySelector("#commit-detail h2").textContent'),'Early target');
-  assert.deepEqual(t.errors,[]);console.log('Chronological navigation passed: out-of-order author dates across pagination, timezone ties, stable display, both directions, repeat clicks, stale filters and changed range.');
+  await evaluate(`window.held=false;window.fetch=async(url,opts)=>{if(String(url).includes('/api/commits?')){window.heldScope=new URL(url,location.origin).searchParams.get('scope');window.held=true;await new Promise(r=>window.release=r);}return window.savedFetch(url,opts)}`);
+  await move('next');await wait('window.held');
+  const frozenScope=await evaluate('window.heldScope');assert.match(frozenScope,/^[a-f0-9]{64}$/);
+  commit('Range changed','2020-01-04T00:00:00Z');const advanced=git('rev-parse','HEAD');
+  await evaluate('window.fetch=window.savedFetch;window.release()');
+  await wait('document.querySelector("#commit-detail h2")?.textContent==="Middle target" && document.querySelector(".current-change")?.textContent==="当前 1 / 1"');
+  assert.equal(await evaluate('document.querySelectorAll("#commits .commit").length'),54,'navigation completes the original fixed range');
+  assert.equal(await evaluate(`!!document.querySelector('#commits .commit[data-commit-sha="${advanced}"]')`),false,'background commit cannot enter old pagination');
+  assert.equal(await evaluate('document.querySelector("#more").hidden'),true);
+  await evaluate(`window.refreshedScope=null;window.fetch=async(url,opts)=>{const response=await window.savedFetch(url,opts);if(String(url).startsWith('/api/review-scope?')&&response.ok)window.refreshedScope=await response.clone().json();return response;};document.querySelector('#refresh').click()`);
+  await wait('!document.querySelector("#refresh").disabled && window.refreshedScope');
+  const refreshed=await evaluate('window.refreshedScope');assert.notEqual(refreshed.id,frozenScope);assert.equal(refreshed.head,advanced);
+  assert.equal(await evaluate('document.querySelector("#commits .commit").dataset.commitSha'),advanced,'explicit refresh includes new commit');
+  assert.match(await evaluate('document.querySelector("#scope-endpoints").textContent'),new RegExp(advanced.slice(0,8)));
+  await evaluate('document.querySelector("#more").click()');await wait('document.querySelectorAll("#commits .commit").length===55 && document.querySelector("#more").hidden');
+  await evaluate('window.fetch=window.savedFetch');
+  assert.deepEqual(t.errors,[]);console.log('Chronological navigation passed: out-of-order author dates across pagination, timezone ties, stable display, both directions, repeat clicks, stale filters, frozen range and explicit refresh.');
 } finally {
   sockets.forEach(s=>s.close());
   if(chrome&&chrome.exitCode===null){chrome.kill();await new Promise(resolve=>chrome.once('exit',resolve));}

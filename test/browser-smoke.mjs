@@ -465,8 +465,10 @@ try {
   await clickLine('new', 1);
   await wait('!document.querySelector(".selection-actions").hidden && document.activeElement.id === "inline-comment-body"');
   assert.equal(await evaluate('document.querySelector("#inline-comment-body").value'), '划线后直接输入', 'selecting again restores draft');
-  await cdp('Input.dispatchMouseEvent', {type:'mousePressed', ...dragPoints[0], button:'left', clickCount:1});
-  await cdp('Input.dispatchMouseEvent', {type:'mouseReleased', ...dragPoints[0], button:'left', clickCount:1});
+  // Restoring a draft may show a notice and move the editor; use its current position.
+  const currentCode = await evaluate('(() => { const r=document.querySelector(".editor.modified .view-lines .view-line").getBoundingClientRect();return {x:r.x+12,y:r.y+r.height/2}; })()');
+  await cdp('Input.dispatchMouseEvent', {type:'mousePressed', ...currentCode, button:'left', clickCount:1});
+  await cdp('Input.dispatchMouseEvent', {type:'mouseReleased', ...currentCode, button:'left', clickCount:1});
   await wait('document.querySelector(".selection-actions").hidden');
   await clickLine('new', 1);
   await wait('!document.querySelector(".selection-actions").hidden && document.activeElement.id === "inline-comment-body"');

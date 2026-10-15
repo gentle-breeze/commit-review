@@ -38,9 +38,13 @@
   <main class="workspace" hidden>
     <aside class="history pane" aria-label="提交历史">
       <div class="pane-heading"><h1>未 push 的提交</h1><span class="local-tag">LOCAL</span></div>
-      <label class="field-label" for="branch">本地分支</label>
+      <label class="field-label" for="range-mode">提交范围</label>
+      <select id="range-mode"><option value="unpushed">未 push</option><option value="compare">分支比较</option><option value="history">历史提交</option></select>
+      <div id="base-branch-field" hidden><label class="field-label" for="base-branch">基准 A（排除已包含提交）</label><select id="base-branch"></select></div>
+      <label class="field-label" for="branch">待审分支 B</label>
       <select id="branch"><option value="HEAD">HEAD（当前提交）</option></select>
       <p class="history-hint">仅显示未 push 的主线提交；基于本地远程记录，不自动 fetch。</p>
+      <p id="scope-endpoints" class="scope-endpoints" role="status"></p>
       <div class="commit-filter">
         <label class="field-label" for="commit-search">搜索已加载提交</label>
         <input id="commit-search" type="search" placeholder="标题、作者或 SHA">

@@ -31,6 +31,7 @@
   }
 }
 button, select { border-radius: 8px; }
+.scope-endpoints { color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; margin: 0 0 12px; }
 button { transition: background-color .12s, border-color .12s; }
 button:disabled { cursor: default; }
 .topbar { gap: 10px; box-shadow: 0 1px 0 var(--border); border-bottom: 0; }
@@ -151,3 +152,5 @@ button:disabled { cursor: default; }
 .reply-actions{display:flex;gap:6px}.reply-actions button{font-size:11px;padding:3px 6px}#reply-edit-dialog{width:min(680px,96vw);max-height:90vh;overflow:auto}#reply-edit-dialog textarea{width:100%;display:block}#reply-edit-dialog pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:25vh;overflow:auto}#reply-edit-error,#reply-edit-context{overflow-wrap:anywhere}
 
 #followup-options{max-height:45vh;overflow:auto;display:grid;gap:6px;margin:12px 0}#followup-options label{display:flex;gap:8px;align-items:flex-start;overflow-wrap:anywhere}#followup-options input{width:auto;flex:none}.commit-association{display:block;font-size:12px;color:#246a45}.commit.associated-current{box-shadow:inset 3px 0 #26805a}#followup-links{overflow-wrap:anywhere}
+
+.file-comment-button{flex-shrink:0;font-size:12px;padding:5px 9px;white-space:nowrap}.selection-code[hidden]{display:none}

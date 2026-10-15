@@ -72,11 +72,28 @@ try {
   await open();await cdp('Page.bringToFront');await writeFile('/tmp/commit-review-simple-associations.png',Buffer.from((await cdp('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth'));await close();
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
-  // A changing range is rejected without altering data or closing the draft.
-  await open();git(a,'commit','--allow-empty','-m','Range changed');await evaluate('document.querySelector("#followup-save").click()');await wait('document.querySelector("#followup-error").textContent.includes("范围已变化")');assert.equal(app.store.list()[0].linkRevision,2);await close();
+  // Background commits do not change the fixed candidate set or reject an existing draft.
+  await evaluate(`window.scopeIds=[];window.fetch=async(url,opts)=>{if(String(url).includes('/association-scope?'))window.scopeIds.push(new URL(url,location.origin).searchParams.get('id'));return window.savedFetch(url,opts)}`);
+  await open();
+  const frozenScope=await evaluate('window.scopeIds.at(-1)'),frozenCandidates=await evaluate('[...document.querySelectorAll("#followup-options input")].map(n=>n.value)');
+  assert.match(frozenScope,/^[a-f0-9]{64}$/);assert.equal(frozenCandidates.length,56);
+  git(a,'commit','--allow-empty','-m','Range changed');const advanced=git(a,'rev-parse','HEAD');
+  assert.equal(await evaluate(`!!document.querySelector('#followup-options input[value="${advanced}"]')`),false);
+  await select(latest);await evaluate('document.querySelector("#followup-save").click()');await wait('!document.querySelector("#followup-dialog").open');
+  assert.equal(app.store.list()[0].linkRevision,3);assert.deepEqual(app.store.list()[0].followups.filter(link=>!link.removedAt).map(link=>link.sha),[amended]);
+  assert.ok(app.store.list()[0].followups.find(link=>link.sha===latest).removedAt,'saving frozen candidates preserves removed association history');
+  await open();assert.equal(await evaluate('window.scopeIds.at(-1)'),frozenScope);assert.deepEqual(await evaluate('[...document.querySelectorAll("#followup-options input")].map(n=>n.value)'),frozenCandidates);await close();
+  await evaluate('document.querySelector("#refresh").click()');await wait('!document.querySelector("#refresh").disabled');
+  assert.equal(await evaluate('document.querySelector("#commits .commit").dataset.commitSha'),advanced);
+  await open();assert.notEqual(await evaluate('window.scopeIds.at(-1)'),frozenScope,'explicit refresh creates a new range ID');
+  assert.equal(await evaluate('document.querySelectorAll("#followup-options input").length'),57);
+  assert.equal(await evaluate(`!!document.querySelector('#followup-options input[value="${advanced}"]')`),true,'new commit enters candidates only after refresh');
+  const oldScope=await(await fetch(base+'/api/association-scope?id='+frozenScope,{headers})).json();
+  assert.deepEqual(oldScope.commits.map(commit=>commit.sha),frozenCandidates,'refresh does not mutate the previous snapshot');
+  await close();await evaluate('window.fetch=window.savedFetch');
   await cdp('Page.navigate',{url:base+'/?repo='+encodeURIComponent(repos[1])});await wait('document.querySelector("#repository").textContent.includes("B")');
-  assert.equal(app.store.list()[0].linkRevision,2,'other project did not mutate A');
-  assert.deepEqual(t.errors,[]);console.log('Simple association browser passed: full pagination, one save/cancel, preserved legacy history, left-list markers, stale reads, changed range, mobile layout and project isolation.');
+  assert.equal(app.store.list()[0].linkRevision,3,'other project did not mutate A');
+  assert.deepEqual(t.errors,[]);console.log('Simple association browser passed: full pagination, one save/cancel, preserved legacy history, left-list markers, stale reads, frozen candidates and explicit refresh, mobile layout and project isolation.');
 } finally {
   sockets.forEach(s=>s.close());
   if(chrome&&chrome.exitCode===null){chrome.kill();await new Promise(resolve=>chrome.once('exit',resolve));}

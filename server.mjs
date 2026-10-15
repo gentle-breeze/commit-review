@@ -71,7 +71,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
       try {
         await writeFile(path.join(lock, 'pid'), String(process.pid));
         const store = await ReviewStore.open(dataDir, repo.path);
-        sessions.set(key, { id: key, repo, store, lock, token: randomBytes(32).toString('hex'), cachedDiff: null, associationScopes: new Map(), fileIndex: new FileIndex(repo) });
+        sessions.set(key, { id: key, repo, store, lock, token: randomBytes(32).toString('hex'), cachedDiff: null, reviewScopes: new Map(), associationScopes: new Map(), fileIndex: new FileIndex(repo) });
       } catch (error) { await rm(lock, { recursive: true, force: true }); throw error; }
       return info(sessions.get(key));
     });
@@ -91,9 +91,36 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
     return result;
   }
   const scopeKey = scope => JSON.stringify([scope.status,scope.head,scope.base,scope.comparisonRef]);
+  function reviewSnapshot(session, id) {
+    if(typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))throw new Error('审查范围标识无效');
+    const saved=session.reviewScopes.get(id);
+    if(!saved)throw new Error('审查范围已失效，请刷新页面重新加载范围');
+    return saved;
+  }
+  async function createReviewSnapshot(session, options) {
+    const scope=await session.repo.reviewScope(options.ref, options);
+    const snapshot={id:randomBytes(32).toString('hex'),scope,scopeKey:scopeKey(scope)};
+    session.reviewScopes.set(snapshot.id,snapshot);
+    if(session.reviewScopes.size>32)session.reviewScopes.delete(session.reviewScopes.keys().next().value);
+    return {id:snapshot.id,scopeKey:snapshot.scopeKey,...scope};
+  }
   async function associationScope(session, {ref, id}) {
     if(id!==undefined&&id!==null){
       if(!/^[a-f0-9]{64}$/.test(id))throw new Error('审查范围标识无效');
+      const fixed=session.reviewScopes.get(id);
+      if(fixed){
+        if(!fixed.association){
+          const commits=[];
+          let page;
+          do {
+            page=await session.repo.commitPage(fixed.scope,commits.length,100);
+            commits.push(...page.commits);
+            if(commits.length>=5000&&page.hasMore)throw new Error('审查范围超过 5000 条提交，无法加载完整关联候选；请缩小范围。');
+          } while(page.hasMore);
+          fixed.association={id,ref:fixed.scope.ref,scopeKey:fixed.scopeKey,...fixed.scope,commits};
+        }
+        return fixed.association;
+      }
       const saved=session.associationScopes.get(id);
       if(!saved)throw new Error('审查范围已失效，请从当前页面重新复制AI指令或打开修改关联');
       if(scopeKey(await session.repo.reviewScope(saved.ref))!==saved.scopeKey)throw new Error('审查范围已变化，请刷新页面后重新选择关联');
@@ -160,13 +187,23 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
       }
       if (!session && url.pathname.startsWith('/api/')) return send(409, { error: '请先选择需要 Review 的 Git 项目；多项目请求必须指定项目标识' });
       const { repo, store } = session || {};
-      if (req.method === 'GET' && url.pathname === '/api/branches') return send(200, await repo.branches());
+      if (req.method === 'GET' && url.pathname === '/api/branches') return send(200, await repo.branches({includeRemote:url.searchParams.get('all')==='1'}));
+      if (req.method === 'GET' && url.pathname === '/api/review-scope') return send(200, await createReviewSnapshot(session, {
+        mode:url.searchParams.get('mode') || 'unpushed',ref:url.searchParams.get('ref') || 'HEAD',base:url.searchParams.get('base') ?? undefined,
+      }));
       if (req.method === 'GET' && url.pathname === '/api/commits') {
+        if(url.searchParams.has('scope')){
+          const snapshot=reviewSnapshot(session,url.searchParams.get('scope'));
+          return send(200,{...await repo.commitPage(snapshot.scope,numberParam(url.searchParams.get('offset'),0,1000000),numberParam(url.searchParams.get('limit'),50,100)||1),id:snapshot.id,scopeKey:snapshot.scopeKey});
+        }
         return send(200, await repo.commits(url.searchParams.get('ref') || 'HEAD',
           numberParam(url.searchParams.get('offset'), 0, 1000000),
           numberParam(url.searchParams.get('limit'), 50, 100) || 1));
       }
-      if (req.method === 'GET' && url.pathname === '/api/file-index') return send(200, await session.fileIndex.page({ref:url.searchParams.get('ref') || 'HEAD', snapshotId:url.searchParams.get('snapshot') || undefined, offset:numberParam(url.searchParams.get('offset'),0,4999)}));
+      if (req.method === 'GET' && url.pathname === '/api/file-index') {
+        const fixed=url.searchParams.has('scope')?reviewSnapshot(session,url.searchParams.get('scope')):null;
+        return send(200, await session.fileIndex.page({ref:url.searchParams.get('ref') || 'HEAD',scope:fixed?.scope,scopeId:fixed?.id,snapshotId:url.searchParams.get('snapshot') || undefined,offset:numberParam(url.searchParams.get('offset'),0,4999)}));
+      }
       if (req.method === 'GET' && url.pathname === '/api/diff') return send(200, await getDiff(session, url.searchParams.get('sha'), url.searchParams.get('fileId') ?? undefined));
       if (req.method === 'GET' && url.pathname === '/api/file') {
         return send(200, await repo.file(await getDiff(session, url.searchParams.get('sha'), url.searchParams.get('fileId') ?? undefined), url.searchParams.get('fileId')));
@@ -176,7 +213,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
         const data = await readJson(req);
         if (!data || typeof data !== 'object') throw new Error('评论数据无效');
         const diff = await getDiff(session, data.sha, data.anchor?.fileId);
-        const anchor = validateAnchor(diff, data.anchor || {}, await repo.file(diff, data.anchor?.fileId));
+        const anchor = validateAnchor(diff, data.anchor || {}, data.anchor?.kind === 'file' ? undefined : await repo.file(diff, data.anchor?.fileId));
         return send(201, await store.add({ sha: diff.sha, parent: diff.parent, anchor, body: data.body }));
       }
       if(req.method==='GET'&&url.pathname==='/api/association-scope')return send(200,await associationScope(session,{ref:url.searchParams.get('ref')||'HEAD',id:url.searchParams.get('id')}));

@@ -31,7 +31,7 @@ export function visibleFileHistory(groups,{hidden,showHidden=false,skipTests=fal
 export function createFileIndexView({getContext,loadPage,openChange,onError}){
   const $=selector=>document.querySelector(selector), dialog=$('#file-index-dialog');
   let generation=0, controller, data, groups=[], selected, fileLimit=100,eventLimit=50, loading=false;
-  const contextKey=c=>`${c.repository}\0${c.ref}`;
+  const contextKey=c=>`${c.repository}\0${c.ref}\0${c.rangeId || ''}`;
   const stop=()=>{generation++;controller?.abort();controller=null;};
   const node=(tag,text,className)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;};
   const button=(text,action)=>{const b=node('button',text);b.type='button';b.addEventListener('click',action);return b;};

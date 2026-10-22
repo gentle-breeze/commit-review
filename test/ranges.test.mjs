@@ -147,3 +147,44 @@ test('history paginates after push, old scopes persist until eviction and scopes
   assert.equal((await s.request(`/api/association-scope?id=${snapshot.id}`)).status,400);
   assert.equal((await s.get(`/api/commits?scope=${refreshed.id}`)).head,later,'newer scope remains available');
 });
+
+test('author identity filters full frozen ranges before pagination and excludes structural merges', async t => {
+  const f = await fixture(t);
+  const name = 'Same [Name].*', email = 'one+test@example.invalid';
+  const author = JSON.stringify([name, email]);
+  const expected = [];
+  for (let i = 0; i < 55; i++) {
+    f.git('config', 'user.name', name); f.git('config', 'user.email', email);
+    expected.unshift(f.commit(i === 0 ? 'Merge is only a subject' : `Match ${i}`));
+    f.git('config', 'user.email', 'other@example.invalid'); f.commit(`Other ${i}`);
+  }
+  f.git('checkout', '-b', 'side'); f.commit('Side'); f.git('checkout', 'feature');
+  f.git('config', 'user.email', email); f.commit('Mainline'); expected.unshift(f.git('rev-parse', 'HEAD'));
+  f.git('merge', '--no-ff', 'side', '-m', 'Ordinary title with two parents');
+  const merge = f.git('rev-parse', 'HEAD');
+  await f.put('.mailmap', `Mapped <mapped@example.invalid> ${name} <${email}>\n`);
+  f.git('config', 'log.mailmap', 'true');
+  const {get, request} = await service(t, f);
+  for (const mode of ['unpushed', 'compare', 'history']) {
+    const scope = await get('/api/review-scope?' + new URLSearchParams({mode, ref:'feature', base:'main', author}));
+    assert.equal(scope.total, 56);
+    assert.equal(scope.authors.find(a => a.id === author).count, 56);
+    assert.ok(scope.authors.some(a => a.name === name && a.email === 'other@example.invalid'));
+    assert.equal(scope.scopeKey, commitScopeKey(scope));
+    const first = await get(`/api/commits?scope=${scope.id}`), second = await get(`/api/commits?scope=${scope.id}&offset=50`);
+    assert.equal(first.hasMore, true); assert.equal(second.hasMore, false);
+    assert.deepEqual([...first.commits,...second.commits].map(c => c.sha), expected);
+    assert.ok(first.commits.every(c => c.authorEmail === email && c.parents.length <= 1));
+    const candidates = await get(`/api/association-scope?id=${scope.id}`);
+    assert.deepEqual(candidates.commits.map(c => c.sha), expected);
+    const index = await get(`/api/file-index?scope=${scope.id}`);
+    assert.ok(index.commits.every(c => c.authorEmail === email && c.sha !== merge));
+  }
+  const unfiltered = await get('/api/review-scope?mode=history&ref=feature');
+  assert.equal(unfiltered.total, 113);
+  assert.equal((await get(`/api/commits?scope=${unfiltered.id}`)).commits[0].sha, merge);
+  const absent = await get('/api/review-scope?' + new URLSearchParams({mode:'history',author:JSON.stringify(['Missing','missing@example.invalid'])}));
+  assert.equal(absent.total, 0); assert.deepEqual((await get(`/api/commits?scope=${absent.id}`)).commits, []);
+  assert.equal((await request('/api/review-scope?author=invalid')).status, 400);
+  assert.equal((await request('/api/review-scope?author=%5B1,2%5D')).status, 400);
+});

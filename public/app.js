@@ -9,7 +9,7 @@ import { renderCommentText } from './comment-format.js';
 
 const $ = selector => document.querySelector(selector);
 const DEFAULT_FONT_SIZE = 17, MIN_FONT_SIZE = 10, MAX_FONT_SIZE = 24;
-const state = { info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', rangeMode: 'unpushed', baseRef: '', rangeId: null, branches: [], rangeLoading: false, hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true, fontSize: DEFAULT_FONT_SIZE };
+const state = { author: '', info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', rangeMode: 'unpushed', baseRef: '', rangeId: null, branches: [], rangeLoading: false, hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true, fontSize: DEFAULT_FONT_SIZE };
 
 const drafts = new Map();
 const draftKey = () => `${state.diff?.sha}:${state.file?.id}`;
@@ -320,7 +320,7 @@ async function loadCommits(append = false) {
   $('#ai-copy').disabled = true; $('#open-file-index').disabled = true;
   try {
     if (!append) {
-      const snapshot = await api(`/api/review-scope?${new URLSearchParams({mode, ref, ...(mode === 'compare' ? {base} : {})})}`, 'GET', undefined, session);
+      const snapshot = await api(`/api/review-scope?${new URLSearchParams({mode, ref, author: state.author, ...(mode === 'compare' ? {base} : {})})}`, 'GET', undefined, session);
       if (!valid()) return;
       rangeId = snapshot.id;
     }
@@ -330,6 +330,15 @@ async function loadCommits(append = false) {
     state.rangeId = rangeId; state.commitScope = commitScopeKey(result);
     state.commits = append ? [...state.commits, ...result.commits] : result.commits;
     state.hasMore = result.hasMore; state.historyMessage = result.message;
+    $('#commit-author').replaceChildren(new Option('全部作者（含 merge）', ''), ...(result.authors || []).map(author => new Option(`${author.name} <${author.email}> · ${author.count}`, author.id)));
+    if (state.author && ![...$('#commit-author').options].some(option => option.value === state.author)) {
+      const [name, email] = JSON.parse(state.author);
+      $('#commit-author').add(new Option(`${name} <${email}> · 0`, state.author));
+    }
+    $('#commit-author').value = state.author;
+    $('#commit-author').title = $('#commit-author').selectedOptions[0]?.textContent || '';
+    $('#clear-author').disabled = !state.author;
+    $('#author-count').textContent = `范围内共 ${result.total ?? 0} 条${state.author ? '非 merge ' : ''}提交（搜索与隐藏另行过滤）`;
     $('.history h1').textContent = mode === 'history' ? '历史提交' : mode === 'compare' ? '分支比较' : result.comparisonMode === 'local-base' ? '分支独有提交' : '未 push 的提交';
     $('.history-hint').textContent = mode === 'history'
       ? '显示此分支的主线历史，包含已 push、已合并的提交；每页 50 条。'
@@ -337,6 +346,7 @@ async function loadCommits(append = false) {
       : result.comparisonMode === 'local-base'
         ? `无可用远程跟踪分支，对比本地 ${result.comparisonRef.replace('refs/heads/', '')}；分支独有提交不代表远程 push 状态。`
         : `${result.comparisonRef ? `对比 ${result.comparisonRef.replace('refs/remotes/', '')}。` : ''}仅显示未 push 的主线提交。`;
+    if (state.author) $('.history-hint').textContent += ' 已按 Git 作者筛选，排除多父 merge 提交。';
     $('#scope-endpoints').textContent = `${result.head ? `固定范围：${result.base ? result.base.slice(0, 8) + ' → ' : ''}${result.head.slice(0, 8)}。` : ''}切换范围或点击顶部刷新才重新读取分支；不自动 fetch。`;
     renderCommits();
     if (!append) {
@@ -1141,6 +1151,14 @@ $('#comment-dialog').addEventListener('close', () => {
 $('#close-ai').addEventListener('click', () => $('#ai-dialog').close());
 $('#comment-scope').addEventListener('change', renderComments);
 $('#comment-filter').addEventListener('change', renderComments);
+$('#commit-author').addEventListener('change', () => run(async () => {
+  state.author = $('#commit-author').value;
+  await loadCommits();
+}));
+$('#clear-author').addEventListener('click', () => run(async () => {
+  state.author = '';
+  await loadCommits();
+}));
 $('#branch').addEventListener('change', () => run(async () => {
   state.ref = $('#branch').value;
   state.generation++;
@@ -1228,7 +1246,7 @@ async function init() {
     return;
   }
   if (preferenceRepository !== state.info.repository) {
-    state.rangeMode = 'unpushed'; state.ref = 'HEAD'; state.baseRef = ''; state.rangeId = null;
+    state.author = ''; state.rangeMode = 'unpushed'; state.ref = 'HEAD'; state.baseRef = ''; state.rangeId = null;
     readComments.clear(); activeCommentId = null;
     preferenceRepository = state.info.repository; hiddenCommits = new Set(); selectedCommits.clear(); showingHidden = false;
     skipTestFiles = true;

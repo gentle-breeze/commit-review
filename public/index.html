@@ -46,6 +46,10 @@
       <p class="history-hint">仅显示未 push 的主线提交；基于本地远程记录，不自动 fetch。</p>
       <p id="scope-endpoints" class="scope-endpoints" role="status"></p>
       <div class="commit-filter">
+        <label class="field-label" for="commit-author">Git 作者（仅非 merge 提交）</label>
+        <select id="commit-author"><option value="">全部作者（含 merge）</option></select>
+        <button id="clear-author" type="button" disabled>清除作者筛选</button>
+        <span id="author-count" role="status"></span>
         <label class="field-label" for="commit-search">搜索已加载提交</label>
         <input id="commit-search" type="search" placeholder="标题、作者或 SHA">
         <span id="hidden-count" role="status">本仓库已隐藏 0 条</span>

@@ -90,7 +90,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
     session.cachedDiff = result;
     return result;
   }
-  const scopeKey = scope => JSON.stringify([scope.status,scope.head,scope.base,scope.comparisonRef]);
+  const scopeKey = scope => JSON.stringify([scope.status,scope.head,scope.base,scope.comparisonRef,...(scope.author ? [scope.author] : [])]);
   function reviewSnapshot(session, id) {
     if(typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))throw new Error('审查范围标识无效');
     const saved=session.reviewScopes.get(id);
@@ -98,7 +98,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
     return saved;
   }
   async function createReviewSnapshot(session, options) {
-    const scope=await session.repo.reviewScope(options.ref, options);
+    const scope=await session.repo.authorScope(await session.repo.reviewScope(options.ref, options), options.author);
     const snapshot={id:randomBytes(32).toString('hex'),scope,scopeKey:scopeKey(scope)};
     session.reviewScopes.set(snapshot.id,snapshot);
     if(session.reviewScopes.size>32)session.reviewScopes.delete(session.reviewScopes.keys().next().value);
@@ -189,7 +189,7 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
       const { repo, store } = session || {};
       if (req.method === 'GET' && url.pathname === '/api/branches') return send(200, await repo.branches({includeRemote:url.searchParams.get('all')==='1'}));
       if (req.method === 'GET' && url.pathname === '/api/review-scope') return send(200, await createReviewSnapshot(session, {
-        mode:url.searchParams.get('mode') || 'unpushed',ref:url.searchParams.get('ref') || 'HEAD',base:url.searchParams.get('base') ?? undefined,
+        author:url.searchParams.get('author') || '',mode:url.searchParams.get('mode') || 'unpushed',ref:url.searchParams.get('ref') || 'HEAD',base:url.searchParams.get('base') ?? undefined,
       }));
       if (req.method === 'GET' && url.pathname === '/api/commits') {
         if(url.searchParams.has('scope')){

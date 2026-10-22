@@ -20,4 +20,4 @@ export function chronologicalCommits(commits) {
     .sort((a,b)=>(Number.isFinite(a.time)&&Number.isFinite(b.time)?a.time-b.time:0)||b.index-a.index)
     .map(item=>item.commit);
 }
-export const commitScopeKey = result => JSON.stringify([result.status,result.head,result.base,result.comparisonRef]);
+export const commitScopeKey = result => JSON.stringify([result.status,result.head,result.base,result.comparisonRef,...(result.author ? [result.author] : [])]);

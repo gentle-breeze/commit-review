@@ -9,6 +9,15 @@ test('Test filtering matches only a case-sensitive basename stem suffix',()=>{
   assert.deepEqual(visibleFiles(files,false),files);
   assert.equal(files.length,3);
 });
+test('plural Tests suffix filters Java only and preserves filename semantics',()=>{
+  for(const name of ['FooTests.java','src/FooTests.java','Tests.java','deleted/OldTests.java'])assert.equal(isTestFile(name),true,name);
+  for(const name of ['FooTests.ts','FooTests.kt','FooTests','Footests.java','FooTests.JAVA','FooTests.java.bak','Tests/Foo.java','FooTestsHelper.java'])assert.equal(isTestFile(name),false,name);
+  const files=[{id:'ordinary',path:'Foo.java',oldPath:'FooTests.java'},{id:'renamed',path:'NewTests.java',oldPath:'Old.java'},{id:'deleted',path:'DeletedTests.java',status:'D'},{id:'typescript',path:'FooTests.ts'}];
+  assert.deepEqual(visibleFiles(files,true).map(f=>f.id),['ordinary','typescript']);
+  assert.equal(visibleFiles(files,false),files,'opt-out retains the complete original list');
+  assert.equal(files.length,4,'filtering does not mutate input');
+  assert.deepEqual(visibleFiles([{path:'FooTests.java'},{path:'BarTest.java'}],true),[]);
+});
 test('skip Test preference defaults on and preserves explicit project opt-outs',()=>{
   const storage=new Map();storage.getItem=storage.get.bind(storage);
   assert.equal(readSkipTestFiles(storage,'/A'),true);

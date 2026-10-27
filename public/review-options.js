@@ -4,7 +4,7 @@ export function isTestFile(filePath) {
   const name = filePath.split('/').at(-1);
   const extension = name.lastIndexOf('.');
   const stem = extension > 0 ? name.slice(0, extension) : name;
-  return stem.endsWith('Test');
+  return stem.endsWith('Test') || name.endsWith('Tests.java');
 }
 export function visibleFiles(files, skipTests) {
   return skipTests ? files.filter(file => !isTestFile(file.path)) : files;

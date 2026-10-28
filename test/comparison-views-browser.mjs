@@ -45,6 +45,13 @@ try {
   git('push', '-u', 'origin', 'feature');
   assert.equal(Number(git('rev-list', '--count', 'main..feature')), 55);
 
+  git('switch','-c','composition',baseSha);
+  await writeFile(path.join(repository,'lines.txt'),'aaa\n');git('add','.');git('commit','-m','Add aaa');const aaa = git('rev-parse','HEAD');
+  git('config','user.name','Bob');git('config','user.email','bob@example.invalid');
+  await writeFile(path.join(repository,'lines.txt'),'aaa\nbbb\n');git('add','.');git('commit','-m','Add bbb');const bbb = git('rev-parse','HEAD');
+  await writeFile(path.join(repository,'lines.txt'),'aaa\nbbb\nccc\n');git('add','.');git('commit','-m','Add ccc');const ccc = git('rev-parse','HEAD');
+  git('switch','-c','dependency');await writeFile(path.join(repository,'lines.txt'),'AAA\nbbb\nccc\n');git('add','.');git('commit','-m','Replace aaa');
+  git('switch','feature');
   app = await createApp({repoPath:repository, dataDir:path.join(root, 'data')});
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
@@ -142,6 +149,7 @@ try {
     window.fetch = async (...args) => {
       window.requestedURLs.push(String(args[0]));
       const response = await originalFetch(...args);
+      if (String(args[0]).startsWith('/api/comparison-file?') && response.ok) window.latestComparisonFile = await response.clone().json();
       if (String(args[0]).startsWith('/api/review-scope?') && response.ok) window.latestReviewScope = await response.clone().json();
       return response;
     };
@@ -172,7 +180,7 @@ try {
   await wait(`document.querySelector('.file-comment-button') && !document.querySelector('#refresh').disabled`);
   const stored = JSON.stringify(app.store.list());
   await chooseFile('after.js');
-  const aggregateReady = `document.querySelector('#commit-detail').textContent.includes('全部文件 · 分支净差异') && document.querySelector('.file-title')`;
+  const aggregateReady = `document.querySelector('#commit-detail').textContent.includes('全部文件 · 可见提交改动') && document.querySelector('.file-title')`;
   await select('#comparison-view', 'files'); await wait(aggregateReady);
   const paths = await evaluate(`Array.from(document.querySelectorAll('#files .file-path')).map(n=>n.textContent)`);
   assert.deepEqual(paths.sort(), ['after.js','asset.bin','deleted.txt','progress.txt']);
@@ -188,7 +196,7 @@ try {
   await select('#comparison-view','files');
   await wait(`document.querySelector('.file-title')?.textContent.includes('deleted.txt') && !document.querySelector('.file-comment-button')`);
   await scopeChange(()=>select('#branch','refs/heads/main'));
-  await wait(`document.querySelector('#diff').textContent.includes('没有净差异文件')`);
+  await wait(`document.querySelector('#diff').textContent.includes('没有净改动')`);
   await scopeChange(()=>select('#branch','refs/remotes/origin/feature'));
   await wait(aggregateReady);
   const author = JSON.stringify(['Range Browser Test','test@example.invalid']);
@@ -198,7 +206,7 @@ try {
   // Delay old aggregate responses to prove switches cannot install stale files.
   await evaluate(`window.fetchBeforeDelay = window.fetch; window.fetch = async (...args) => {
     const response = await window.fetchBeforeDelay(...args);
-    if (String(args[0]).startsWith('/api/comparison?')) await new Promise(r=>setTimeout(r,500));
+    if (String(args[0]).startsWith('/api/comparison')) await new Promise(r=>setTimeout(r,500));
     return response;
   }`);
   await select('#comparison-view','commits');
@@ -208,7 +216,7 @@ try {
   await wait(`document.querySelector('.file-comment-button') && document.querySelector('#comparison-view').value==='commits'`);
   await select('#comparison-view','files');
   await select('#branch','refs/heads/main');
-  await wait(`document.querySelector('#diff').textContent.includes('没有净差异文件')`);
+  await wait(`document.querySelector('#diff').textContent.includes('没有净改动')`);
   await delay(700);
   assert.equal(await evaluate(`document.querySelectorAll('#files .file-link').length`),0);
   await scopeChange(()=>select('#branch','refs/remotes/origin/feature')); await wait(aggregateReady);
@@ -226,6 +234,42 @@ try {
   await wait(`document.querySelector('.warning')?.textContent.includes('二进制')`);
   await click('.editor-tools button:last-child');
   await wait(`document.querySelector('.file-title')?.textContent.includes('deleted.txt')`);
+  // Real UI hiding must remove changes from the same file, not just filter paths.
+  await scopeChange(()=>select('#branch','refs/heads/composition')); await wait(aggregateReady);
+  await select('#comparison-view','commits');
+  await wait(`document.querySelector('.file-comment-button')`);
+  const hide = async sha => {
+    await click(`#commits input[value="${sha}"]`); await click('#hide-commits');
+    await wait(`!document.querySelector('#commits input[value="${sha}"]')`);
+  };
+  await hide(aaa);
+  await select('#comparison-view','files');
+  await wait(`window.latestComparisonFile?.new?.text === 'bbb\\nccc\\n' && document.querySelector('.file-title')?.textContent.includes('lines.txt')`);
+  assert.match(await evaluate(`document.querySelector('#commit-detail').textContent`), /选入 2 条，排除 1 条/);
+  await click('#show-hidden');
+  await wait(`window.latestComparisonFile?.new?.text === 'aaa\\n'`);
+  await click('#show-hidden'); await wait(`window.latestComparisonFile?.new?.text === 'bbb\\nccc\\n'`);
+  await scopeChange(()=>select('#commit-author',JSON.stringify(['Bob','bob@example.invalid'])));
+  await wait(`window.latestComparisonFile?.new?.text === 'bbb\\nccc\\n' && document.querySelector('.file-title')`);
+  await click('#show-hidden'); await wait(`document.querySelector('#diff').textContent.includes('没有净改动')`);
+  await click('#show-hidden'); await wait(`document.querySelector('.file-title')`);
+  await scopeChange(()=>click('#clear-author')); await wait(aggregateReady);
+  await select('#comparison-view','commits'); await wait(`document.querySelector('.file-comment-button')`);
+  await hide(bbb); await hide(ccc);
+  await select('#comparison-view','files');await wait(`document.querySelector('#diff').textContent.includes('没有净改动')`);
+  await click('#restore-commits');await wait(`window.latestComparisonFile?.new?.text === 'aaa\\nbbb\\nccc\\n' && document.querySelector('.file-title')`);
+  await select('#comparison-view','commits'); await wait(`document.querySelector('.file-comment-button')`);await hide(aaa);
+  await select('#comparison-view','files');await wait(`window.latestComparisonFile?.new?.text === 'bbb\\nccc\\n'`);
+  await scopeChange(()=>select('#branch','refs/heads/dependency'));
+  await wait(`document.querySelector('#diff').textContent.includes('依赖已排除的行')`);
+  assert.equal(await evaluate(`document.querySelectorAll('#files .file-link').length`),0,'conflict must not show partial or fallback diff');
+  await click('#restore-commits');await wait(`window.latestComparisonFile?.new?.text === 'AAA\\nbbb\\nccc\\n' && document.querySelector('.file-title')`);
+  // Trigger two delayed compositions, ending in ordinary visible mode.
+  await click('#show-hidden'); await click('#show-hidden');
+  await delay(1200);
+  await wait(`document.querySelector('.file-title') && document.querySelector('#show-hidden').getAttribute('aria-pressed')==='false'`);
+  assert.equal(await evaluate(`window.latestComparisonFile.new.text`),'AAA\nbbb\nccc\n');
+  assert.equal(JSON.stringify(app.store.list()),stored,'compositions never rewrite real comment anchors');
   assert.doesNotMatch(await evaluate(`document.querySelector('#files').textContent`), /null/);
   await capture(screenshotPath);
   await cdp('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:false});

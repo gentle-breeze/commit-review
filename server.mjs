@@ -104,6 +104,22 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
     if(session.reviewScopes.size>32)session.reviewScopes.delete(session.reviewScopes.keys().next().value);
     return {id:snapshot.id,scopeKey:snapshot.scopeKey,...scope};
   }
+  async function comparisonSnapshot(session, options) {
+    const snapshot = reviewSnapshot(session,options.scope);
+    const hidden = options.hidden ?? [], showHidden = options.showHidden ?? false;
+    if (!Array.isArray(hidden) || hidden.length > 1000 || hidden.some(sha => typeof sha !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(sha)) || typeof showHidden !== 'boolean') throw new Error('隐藏提交参数无效（最多 1000 条）');
+    const key = JSON.stringify([snapshot.id,[...new Set(hidden)].sort(),showHidden]);
+    const cache = session.comparisons ??= new Map();
+    let saved = [...cache.values()].find(item => item.key === key);
+    if (!saved) {
+      const id = randomBytes(32).toString('hex');
+      saved = {id,key,scopeId:snapshot.id};
+      saved.result = session.repo.comparison(snapshot.scope,{hidden,showHidden}).catch(error => { cache.delete(id); throw error; });
+      cache.set(id,saved);
+      if (cache.size > 8) cache.delete(cache.keys().next().value);
+    }
+    return {...saved,diff:await saved.result};
+  }
   async function associationScope(session, {ref, id}) {
     if(id!==undefined&&id!==null){
       if(!/^[a-f0-9]{64}$/.test(id))throw new Error('审查范围标识无效');
@@ -204,12 +220,21 @@ export async function createApp({ repoPath, projectsDir = path.dirname(directory
         const fixed=url.searchParams.has('scope')?reviewSnapshot(session,url.searchParams.get('scope')):null;
         return send(200, await session.fileIndex.page({ref:url.searchParams.get('ref') || 'HEAD',scope:fixed?.scope,scopeId:fixed?.id,snapshotId:url.searchParams.get('snapshot') || undefined,offset:numberParam(url.searchParams.get('offset'),0,4999)}));
       }
-      if (req.method === 'GET' && ['/api/comparison', '/api/comparison-file'].includes(url.pathname)) {
-        const snapshot = reviewSnapshot(session, url.searchParams.get('scope'));
-        // Cache only within this project and immutable scope, never in the commit diff cache.
-        snapshot.comparison ??= repo.comparison(snapshot.scope).catch(error => { delete snapshot.comparison; throw error; });
-        const diff = await snapshot.comparison;
-        return send(200, url.pathname === '/api/comparison' ? {...diff, scopeId:snapshot.id} : await repo.file(diff, url.searchParams.get('fileId')));
+      if (['GET','POST'].includes(req.method) && url.pathname === '/api/comparison') {
+        const options = req.method === 'POST' ? await readJson(req) : {scope:url.searchParams.get('scope')};
+        if (!options || typeof options !== 'object') throw new Error('组合参数无效');
+        const saved = await comparisonSnapshot(session,options);
+        const {_versions,...diff} = saved.diff;
+        return send(200,{...diff,scopeId:saved.scopeId,comparisonId:saved.id});
+      }
+      if (req.method === 'GET' && url.pathname === '/api/comparison-file') {
+        let saved;
+        if (url.searchParams.has('comparison')) {
+          saved = session.comparisons?.get(url.searchParams.get('comparison'));
+          if (!saved) throw new Error('改动组合已失效，请重新切换视图');
+          saved = {...saved,diff:await saved.result};
+        } else saved = await comparisonSnapshot(session,{scope:url.searchParams.get('scope')});
+        return send(200,await repo.file(saved.diff,url.searchParams.get('fileId')));
       }
       if (req.method === 'GET' && url.pathname === '/api/diff') return send(200, await getDiff(session, url.searchParams.get('sha'), url.searchParams.get('fileId') ?? undefined));
       if (req.method === 'GET' && url.pathname === '/api/file') {

@@ -43,6 +43,7 @@
       <div id="base-branch-field" hidden><label class="field-label" for="base-branch">基准 A（排除已包含提交）</label><select id="base-branch"></select></div>
       <label class="field-label" for="branch">待审分支 B</label>
       <select id="branch"><option value="HEAD">HEAD（当前提交）</option></select>
+      <div id="comparison-view-field" hidden><label class="field-label" for="comparison-view">组织方式</label><select id="comparison-view"><option value="commits">按 commit</option><option value="files">全部文件（净差异）</option></select></div>
       <p class="history-hint">仅显示未 push 的主线提交；基于本地远程记录，不自动 fetch。</p>
       <p id="scope-endpoints" class="scope-endpoints" role="status"></p>
       <div class="commit-filter">

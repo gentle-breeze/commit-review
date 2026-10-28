@@ -9,7 +9,7 @@ import { renderCommentText } from './comment-format.js';
 
 const $ = selector => document.querySelector(selector);
 const DEFAULT_FONT_SIZE = 17, MIN_FONT_SIZE = 10, MAX_FONT_SIZE = 24;
-const state = { author: '', info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', rangeMode: 'unpushed', baseRef: '', rangeId: null, branches: [], rangeLoading: false, hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true, fontSize: DEFAULT_FONT_SIZE };
+const state = { comparisonView: 'commits', commitPosition: null, aggregateFile: null, author: '', info: null, commits: [], comments: [], diff: null, selection: null, ref: 'HEAD', rangeMode: 'unpushed', baseRef: '', rangeId: null, branches: [], rangeLoading: false, hasMore: false, generation: 0, listGeneration: 0, editing: null, fileGeneration: 0, editor: null, file: null, versions: null, wrap: false, collapse: true, fontSize: DEFAULT_FONT_SIZE };
 
 const drafts = new Map();
 const draftKey = () => `${state.diff?.sha}:${state.file?.id}`;
@@ -54,7 +54,7 @@ function statusLabel(comment) {
 const readComments = new Map();
 let activeCommentId = null, navigatingComment = false;
 const commentVisible = comment => commentShas(comment).some(sha => hiddenCommits.has(sha) === showingHidden);
-const visibleReviewComments = () => reviewComments(state.comments, {
+const visibleReviewComments = () => state.diff?.aggregate && $('#comment-scope').value === 'commit' ? [] : reviewComments(state.comments, {
   hidden: hiddenCommits, showingHidden, scope: $('#comment-scope').value,
   sha: state.diff?.sha, filter: $('#comment-filter').value,
 });
@@ -227,6 +227,7 @@ function updateCommitActions() {
   $('#restore-commits').disabled = !hiddenCommits.size;
 }
 async function reconcileCommit() {
+  if (aggregateView()) return;
   const listed = listedCommits();
   const current = state.diff?.sha || state.requestedSha;
   if (listed.some(commit => commit.sha === current)) return;
@@ -266,9 +267,9 @@ function renderCommits() {
   const target = $('#commits');
   target.replaceChildren();
   for (const commit of listedCommits()) {
-    const node = button('', () => run(() => loadDiff(commit.sha)), `commit${state.diff?.sha === commit.sha ? ' active' : ''}`);
+    const node = button('', () => run(() => loadDiff(commit.sha)), `commit${!state.diff?.aggregate && state.diff?.sha === commit.sha ? ' active' : ''}`);
     node.dataset.commitSha = commit.sha;
-    if (state.diff?.sha === commit.sha) node.setAttribute('aria-current', 'true');
+    if (!state.diff?.aggregate && state.diff?.sha === commit.sha) node.setAttribute('aria-current', 'true');
     node.append(el('span', 'commit-subject', commit.subject));
     const meta = el('span', 'commit-meta');
     meta.append(el('code', '', commit.sha.slice(0, 8)), el('span', '', commit.author), el('span', '', date(commit.date)));
@@ -292,9 +293,10 @@ function renderCommits() {
   }
   if (!listedCommits().length) empty(target, commitEmptyMessage());
   updateCommitActions();
-  $('#more').hidden = !state.hasMore;
+  updateComparisonView();
+  $('#more').hidden = aggregateView() || !state.hasMore;
   const linked = $('#comment-commit'); linked.replaceChildren();
-  if (state.diff && (state.commentLocatedSha === state.diff.sha || state.indexLocatedSha === state.diff.sha) && commentVisible(state.diff) && !listedCommits().some(commit => commit.sha === state.diff.sha)) {
+  if (state.diff && !state.diff.aggregate && (state.commentLocatedSha === state.diff.sha || state.indexLocatedSha === state.diff.sha) && commentVisible(state.diff) && !listedCommits().some(commit => commit.sha === state.diff.sha)) {
     const sha = state.diff.sha;
     const node = button('', () => run(() => loadDiff(sha)), 'commit active linked-comment-commit');
     node.dataset.commitSha = sha; node.setAttribute('aria-current', 'true');
@@ -311,6 +313,7 @@ async function loadCommits(append = false) {
   let rangeId = state.rangeId;
   state.rangeLoading = true;
   if (!append) {
+    state.commitPosition = null; state.aggregateFile = null;
     fileIndexView.invalidate(); state.rangeId = null; state.commitScope = null;
     state.commits = []; state.hasMore = false; selectedCommits.clear();
     state.historyMessage = '正在读取提交范围…';
@@ -351,7 +354,8 @@ async function loadCommits(append = false) {
     renderCommits();
     if (!append) {
       const first = listedCommits()[0];
-      if (first) await loadDiff(first.sha);
+      if (aggregateView()) await loadComparison();
+      else if (first) await loadDiff(first.sha);
       else clearCommitDetail();
     } else await reconcileCommit();
   } catch (error) {
@@ -366,7 +370,54 @@ async function loadCommits(append = false) {
     }
   }
 }
+const aggregateView = () => state.rangeMode === 'compare' && state.comparisonView === 'files';
+function updateComparisonView() {
+  const aggregate = aggregateView();
+  $('#comparison-view-field').hidden = state.rangeMode !== 'compare';
+  $('#comparison-view').value = state.comparisonView;
+  $('#commits').hidden = aggregate;
+  $('#comment-commit').hidden = aggregate;
+  $('#commit-search').disabled = aggregate;
+  if (aggregate) for (const selector of ['#select-commits', '#hide-commits', '#show-hidden', '#restore-commits']) $(selector).disabled = true;
+}
+async function loadComparison() {
+  const scope = state.rangeId, session = state.info;
+  clearCommitDetail();
+  const generation = state.generation;
+  empty($('#diff'), '正在读取分支净差异…');
+  if (!scope) return;
+  try {
+    const diff = await api(`/api/comparison?scope=${encodeURIComponent(scope)}`, 'GET', undefined, session);
+    if (generation !== state.generation || scope !== state.rangeId || session !== state.info || !aggregateView()) return;
+    state.diff = diff;
+    updateFocusCommit(); renderCommits();
+    await renderDiff(null, state.aggregateFile);
+    renderComments();
+  } catch (error) {
+    if (generation !== state.generation) return;
+    empty($('#diff'), error.message); throw error;
+  }
+}
+$('#comparison-view').addEventListener('change', () => run(async () => {
+  if (state.diff?.aggregate) state.aggregateFile = state.file?.id;
+  else if (state.diff) state.commitPosition = {sha:state.diff.sha, fileId:state.file?.id};
+  state.comparisonView = $('#comparison-view').value;
+  renderCommits();
+  if (aggregateView()) await loadComparison();
+  else {
+    const position = state.commitPosition;
+    const sha = position?.sha || listedCommits()[0]?.sha;
+    if (sha) await loadDiff(sha, null, position?.fileId);
+    else clearCommitDetail();
+  }
+}));
 async function loadDiff(sha, entry = null, initialFileId) {
+  if (aggregateView()) {
+    state.aggregateFile = state.file?.id;
+    state.comparisonView = 'commits';
+    updateComparisonView();
+  }
+
   state.requestedSha = sha;
   disposeEditor();
   const generation = ++state.generation;
@@ -406,11 +457,18 @@ function disposeEditor() {
 async function renderDiff(entry = null, initialFileId) {
   disposeEditor();
   const diff = state.diff;
+  $('.review-toolbar span').textContent = diff.aggregate ? '分支净差异 · 评论请返回原提交定位' : '点击行号或拖选代码评论 · Shift + 点击扩选';
   const detail = $('#commit-detail');
   detail.replaceChildren(el('div', 'eyebrow', `COMMIT / ${diff.sha.slice(0, 8)}`), el('h2', '', diff.subject));
   const meta = el('div', 'detail-meta');
   meta.append(el('code', '', diff.sha), el('div', '', diff.parent ? `与${diff.parents.length > 1 ? '第一父提交' : '父提交'} ${diff.parent.slice(0, 8)} 比较` : '根提交 · 与空树比较'));
   detail.append(meta);
+  if (diff.aggregate) {
+    detail.replaceChildren(el('h2', '', diff.subject), el('p', '', `共同祖先 ${diff.parent.slice(0,8)} → 待审分支 ${diff.sha.slice(0,8)} · ${diff.files.length} 个净差异文件`),
+      el('p', '', '相同文件只展示一次；已撤销改动不在此列。提交搜索与隐藏不影响净差异。评论保留原提交锚点，请切换到按 commit 或通过「按文件看提交」定位评论。'),
+      ...(state.author ? [el('p', '', '作者筛选：仅显示该作者提交触及的路径（含重命名前路径）；内容仍是完整分支净差异，可能包含其他作者的修改。')] : []));
+  }
+
   if (diff.focusedFileId !== undefined) detail.append(el('p', '', '仅显示索引选中的文件（此提交超过普通列表显示范围）。'), button('查看此提交全部文件', () => run(() => loadDiff(diff.sha))));
   $('#files').replaceChildren();
   $('#diff').replaceChildren();
@@ -419,6 +477,7 @@ async function renderDiff(entry = null, initialFileId) {
   if (entry === 'followup' && initialFileId === undefined) empty($('#diff'), '关联文件在此提交中没有文件差异；请在关联对照中查看对应快照。');
   else if (files.length) await loadFile(files.find(file=>file.id===initialFileId)?.id ?? (entry === 'previous' ? files.at(-1).id : files[0].id), entry);
   else {
+    if (diff.aggregate) { empty($('#diff'), diff.files.length ? '净差异文件均被过滤，请关闭跳过 Test 文件。' : '此范围没有净差异文件（或没有匹配作者的路径）。'); return; }
     empty($('#diff'), diff.files.length ? '当前提交的文件均被跳过；关闭“跳过 *Test 文件”可查看。' : '此提交没有文件差异');
     $('#diff').append(button('[ 上一处 · 上一个提交', () => run(() => navigateFile('previous')), 'previous-empty-commit'), button('] 下一处 · 下一个提交', () => run(() => navigateFile('next')), 'next-empty-commit'));
   }
@@ -433,7 +492,8 @@ function renderFileList() {
     item.title = file.path;
     item.append(el('span', 'file-path', file.path));
     item.dataset.file = file.id;
-    item.append(el('span', 'added', `+${file.additions}`), el('span', 'deleted', `−${file.deletions}`));
+    if (file.binary) item.append(el('span', '', '二进制'));
+    else item.append(el('span', 'added', `+${file.additions}`), el('span', 'deleted', `−${file.deletions}`));
     $('#files').append(item);
   }
   return files;
@@ -504,6 +564,7 @@ async function navigateFile(direction) {
     const index = files.findIndex(file => file.id === state.file?.id);
     const next = files[index + (direction === 'previous' ? -1 : 1)];
     if (next) { notice(''); await loadFile(next.id, direction); return; }
+    if (state.diff.aggregate) { notice(direction === 'previous' ? '已到第一个净差异文件。' : '已到最后一个净差异文件。'); return; }
     await navigateCommit(direction);
   } finally { navigatingDiffBoundary = false; }
 }
@@ -549,7 +610,7 @@ async function loadFile(fileId, entry = null) {
   document.querySelectorAll('.file-link').forEach(node => node.classList.toggle('active', node.dataset.file === fileId));
   empty($('#diff'), '正在加载历史文件全文…');
   let versions;
-  try { versions = await api(`/api/file?sha=${diff.sha}&fileId=${encodeURIComponent(fileId)}`, 'GET', undefined, session); }
+  try { versions = await api(diff.aggregate ? `/api/comparison-file?scope=${encodeURIComponent(diff.scopeId)}&fileId=${encodeURIComponent(fileId)}` : `/api/file?sha=${diff.sha}&fileId=${encodeURIComponent(fileId)}`, 'GET', undefined, session); }
   catch (error) {
     if (generation === state.fileGeneration) {
       state.fileLoading = false;
@@ -566,7 +627,9 @@ async function loadFile(fileId, entry = null) {
   const name = file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path;
   const header = el('div', 'file-header');
   const title = el('span', 'file-title', `${file.status}  ${name}`); title.title = name;
-  header.append(title, button('评论此文件', () => openFileComment(diff, file, session), 'file-comment-button')); card.append(header);
+  header.append(title);
+  if (!diff.aggregate) header.append(button('评论此文件', () => openFileComment(diff, file, session), 'file-comment-button'));
+  card.append(header);
   $('#diff').replaceChildren(card);
   if (versions.unavailable) {
     card.append(el('div', 'warning', versions.unavailable));
@@ -607,6 +670,16 @@ async function loadFile(fileId, entry = null) {
   const viewport = el('div', 'editor-scroll');
   const container = el('div', 'monaco-host');
   viewport.append(container); card.append(viewport);
+  if (diff.aggregate) {
+    state.editor = createComparison(container, {
+      file, versions, entry, wrap:state.wrap, collapse:state.collapse, fontSize:state.fontSize,
+      onBoundary:direction => run(() => navigateFile(direction)), onSelect:() => false,
+      onSelectionComplete:() => {}, onCommentClick:() => {}, onViewportChange:() => {},
+      onChanges:amount => { count.textContent = `${amount} 处变更`; },
+      onCurrentChange:(index,total) => { current.textContent = total ? `当前 ${index} / ${total}` : ''; },
+    });
+    return;
+  }
   const key = draftKey();
   const actions = el('form', 'selection-actions'); actions.hidden = true; actions.dataset.actions = file.id;
   actions.setAttribute('aria-label', '选区评论');
@@ -792,6 +865,7 @@ function selectLines(file, side, startLine, endLine, extend, columns) {
   return true;
 }
 function paintSelection() {
+  if (state.diff?.aggregate) { state.editor?.paint(null, []); return; }
   const selection = state.selection;
   state.editor?.paint(selection?.kind === 'file' ? null : selection, state.comments.filter(comment => comment.kind !== 'file' && commentVisible(comment) && comment.sha === state.diff?.sha && comment.fileId === state.file?.id));
   document.querySelectorAll('[data-actions]').forEach(node => {
@@ -917,7 +991,7 @@ async function openReviewComment(comment, original = false) {
   if (!commentVisible(comment)) return;
 
   if (skipTestFiles && isTestFile(comment.path)) { notice('此评论属于已跳过的 Test 文件；关闭“跳过 *Test 文件”后可定位，评论和回复仍保留。'); return; }
-  if (state.diff?.sha !== comment.sha) await loadDiff(comment.sha, null, comment.fileId);
+  if (state.diff?.aggregate || state.diff?.sha !== comment.sha) await loadDiff(comment.sha, null, comment.fileId);
   if (state.diff?.sha !== comment.sha) { if(mine===commentNavigationGeneration&&state.info===session){notice('原始提交不可读取；保存的原始片段可在“修改关联”的原始记录中查看。');} return; }
   const file = state.diff.files.find(file => file.id === comment.fileId);
   if (!file) { notice('此评论对应文件不在当前显示范围内。', true); return; }
@@ -977,6 +1051,7 @@ document.addEventListener('keydown', event => {
 function renderComments() {
   const comments = visibleReviewComments();
   $('#comment-visibility').textContent = showingHidden ? '隐藏项模式：仅查看隐藏提交的评论与回复；恢复后回到关注列表。' : '关注列表：显示原始或关联提交仍可见的评论；当前提交范围也包含人工关联评论。';
+  if (state.diff?.aggregate) $('#comment-visibility').textContent = '净差异不关联提交行号；选择全部提交可查看讨论，点击原始位置返回对应 commit。';
   $('#comment-count').textContent = String(comments.length);
   const target = $('#comments');
   const focusedReply = replyFocusKey();
@@ -1165,6 +1240,7 @@ $('#branch').addEventListener('change', () => run(async () => {
   await loadCommits();
 }));
 function renderRangeChoices() {
+  updateComparisonView();
   $('#range-mode').value = state.rangeMode;
   $('#base-branch-field').hidden = state.rangeMode !== 'compare';
   const label = branch => `${branch.name.replace(/^refs\/(heads|remotes)\//, '')}${branch.name.startsWith('refs/remotes/') ? ' · 远程记录' : ' · 本地'}${branch.current ? ' · 当前' : ''}`;
@@ -1246,7 +1322,7 @@ async function init() {
     return;
   }
   if (preferenceRepository !== state.info.repository) {
-    state.author = ''; state.rangeMode = 'unpushed'; state.ref = 'HEAD'; state.baseRef = ''; state.rangeId = null;
+    state.comparisonView = 'commits'; state.author = ''; state.rangeMode = 'unpushed'; state.ref = 'HEAD'; state.baseRef = ''; state.rangeId = null;
     readComments.clear(); activeCommentId = null;
     preferenceRepository = state.info.repository; hiddenCommits = new Set(); selectedCommits.clear(); showingHidden = false;
     skipTestFiles = true;
